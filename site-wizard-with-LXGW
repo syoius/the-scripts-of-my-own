@@ -1,9 +1,9 @@
 // ==UserScript==
-// @name         AO3: Site Wizard (with LXGW WenKai Screen CDN)
+// @name         AO3: Site Wizard (with LXGW WenKai Screen CDN) - Personal Edition
 // @namespace    http://tampermonkey.net/
-// @version      1.5.0
-// @description  Customize AO3 work and site styles with LXGW WenKai Screen online font, standalone Userscripts Navbar menu, and E-ink reading options.
-// @author       BlackBatCat (Modified by Syoius)
+// @version      1.6.1
+// @description  Customize AO3 work and site styles with LXGW WenKai Screen online font, seamlessly sharing the Userscripts navbar menu with other scripts.
+// @author       BlackBatCat (Modified)
 // @match        *://archiveofourown.org/*
 // @match        *://*.archiveofourown.org/*
 // @grant        GM_addStyle
@@ -13,8 +13,8 @@
 (function () {
     'use strict';
 
-    // 1. 注入 JSDelivr 提供的霞鹜文楷屏幕版 CSS CDN
-    const cdnFontCss = `@import url('https://cdn.jsdelivr.net/npm/lxgw-wenkai-screen-web@1.3.0/style.css');`;
+    // 1. 修复：使用 @latest 动态解析最新版本，解决 1.3.0 版本无法找到的问题
+    const cdnFontCss = `@import url('https://cdn.jsdelivr.net/npm/lxgw-wenkai-screen-web@latest/style.css');`;
     GM_addStyle(cdnFontCss);
 
     // 默认配置（字号 110%，首行缩进开关）
@@ -27,7 +27,7 @@
         maxWidth: '42em',
         letterSpacing: '0.02em',
         paragraphSpacing: '0.8em',
-        enableIndent: false, // 缩进开关：开 = 2em (2个中文字符), 关 = 0em
+        enableIndent: false, // 缩进开关：开 = 2em, 关 = 0em
         justifyText: true,
         highContrast: true,
         hideNotes: false
@@ -113,34 +113,48 @@
         styleEl.textContent = cssRules;
     }
 
-    // 3. 构建控制面板 UI 及 100% 还原原版 Userscripts 顶级菜单逻辑
+    // 3. 构建控制面板 UI 及原作者兼容的 Userscripts 顶级菜单共享逻辑
     function createUI() {
         if (document.getElementById('ao3-wizard-ui')) return;
 
         const settings = getSettings();
 
-        // [原版 Userscripts 菜单逻辑]
-        const mainNav = document.querySelector('#header ul.primary');
-        if (mainNav) {
-            // 查找是否已存在 Userscripts 顶级下拉菜单
-            let userscriptsMenu = mainNav.querySelector('li.dropdown.userscripts-menu');
+        // 原作者全家桶通用的 Navbar 寻找与挂载逻辑
+        const primaryNav = document.querySelector('#header ul.primary');
+        if (primaryNav) {
+            // 匹配原作者可能使用的各种 class 和结构模式
+            let userscriptMenu = primaryNav.querySelector('li.userscripts, li.userscript, li.dropdown[menu="userscripts"]');
+
+            // 如果没通过 class 找到，通过菜单文本内容做兜底匹配
+            if (!userscriptMenu) {
+                const lis = primaryNav.querySelectorAll('li.dropdown');
+                for (let li of lis) {
+                    const a = li.querySelector('a');
+                    if (a && a.textContent.trim().toLowerCase() === 'userscripts') {
+                        userscriptMenu = li;
+                        break;
+                    }
+                }
+            }
+
             let menuList = null;
 
-            if (!userscriptsMenu) {
-                // 如果不存在，创建新的 li.dropdown 菜单项
-                userscriptsMenu = document.createElement('li');
-                userscriptsMenu.className = 'dropdown userscripts-menu';
-                userscriptsMenu.innerHTML = `
+            if (userscriptMenu) {
+                // 如果原作者的菜单已经存在，直接获取其内部的下拉列表 ul
+                menuList = userscriptMenu.querySelector('ul');
+            } else {
+                // 如果当前脚本是最先加载的，按照原作者标准结构创建顶级菜单
+                userscriptMenu = document.createElement('li');
+                userscriptMenu.className = 'dropdown userscripts';
+                userscriptMenu.innerHTML = `
                     <a class="dropdown-toggle" data-toggle="dropdown" href="#">Userscripts</a>
                     <ul class="menu dropdown-menu" role="menu"></ul>
                 `;
-                mainNav.appendChild(userscriptsMenu);
-                menuList = userscriptsMenu.querySelector('ul.dropdown-menu');
-            } else {
-                menuList = userscriptsMenu.querySelector('ul.dropdown-menu');
+                primaryNav.appendChild(userscriptMenu);
+                menuList = userscriptMenu.querySelector('ul');
             }
 
-            // 在 Userscripts 菜单下追加当前插件项
+            // 在共享的 Userscripts 菜单下追加本脚本的入口项
             if (menuList && !document.getElementById('ao3-wizard-nav-link')) {
                 const menuItem = document.createElement('li');
                 menuItem.innerHTML = `<a id="ao3-wizard-nav-link" href="#">Site Wizard</a>`;
@@ -238,19 +252,19 @@
 
         document.body.appendChild(container);
 
-        // 显示/隐藏逻辑
+        // 显示/隐藏面板逻辑
         const toggleUI = (e) => {
             if (e) e.preventDefault();
             container.style.display = container.style.display === 'none' ? 'block' : 'none';
         };
 
-        // 绑定事件：Navbar 菜单点击 & 关闭按钮
+        // 事件绑定：菜单项点击 & 关闭按钮
         const navLink = document.getElementById('ao3-wizard-nav-link');
         if (navLink) navLink.addEventListener('click', toggleUI);
 
         document.getElementById('wiz-close').addEventListener('click', toggleUI);
 
-        // 快捷键支持: Shift + Alt + W
+        // 快捷键: Shift + Alt + W
         document.addEventListener('keydown', (e) => {
             if (e.shiftKey && e.altKey && e.code === 'KeyW') {
                 toggleUI();
