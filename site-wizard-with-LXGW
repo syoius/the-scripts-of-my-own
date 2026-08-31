@@ -1,9 +1,9 @@
 // ==UserScript==
-// @name         AO3: Site Wizard (with LXGW WenKai Screen CDN) - Personal Edition
+// @name         AO3: Site Wizard (with LXGW WenKai Screen CDN)
 // @namespace    http://tampermonkey.net/
-// @version      1.3.1
-// @description  Customize AO3 work and site styles with LXGW WenKai Screen online font, Navbar integration, and rich E-ink reading options.
-// @author       BlackBatCat (Modified by syoius)
+// @version      1.5.0
+// @description  Customize AO3 work and site styles with LXGW WenKai Screen online font, standalone Userscripts Navbar menu, and E-ink reading options.
+// @author       BlackBatCat (Modified by Syoius)
 // @match        *://archiveofourown.org/*
 // @match        *://*.archiveofourown.org/*
 // @grant        GM_addStyle
@@ -17,17 +17,17 @@
     const cdnFontCss = `@import url('https://cdn.jsdelivr.net/npm/lxgw-wenkai-screen-web@1.3.0/style.css');`;
     GM_addStyle(cdnFontCss);
 
-    // 默认配置
+    // 默认配置（字号 110%，首行缩进开关）
     const DEFAULT_SETTINGS = {
         enabled: true,
         siteFont: '"LXGW WenKai GB Screen", "LXGW WenKai Screen", serif',
         workFont: '"LXGW WenKai GB Screen", "LXGW WenKai Screen", serif',
-        fontSize: '105%',
+        fontSize: '110%',
         lineHeight: '1.7',
         maxWidth: '42em',
         letterSpacing: '0.02em',
         paragraphSpacing: '0.8em',
-        textIndent: '0em',
+        enableIndent: false, // 缩进开关：开 = 2em (2个中文字符), 关 = 0em
         justifyText: true,
         highContrast: true,
         hideNotes: false
@@ -82,11 +82,11 @@
                 ${settings.lineHeight ? `line-height: ${settings.lineHeight} !important;` : ''}
             }
 
-            /* 3. 段落细节微调（字间距、段间距、缩进、对齐） */
+            /* 3. 段落细节微调 */
             #workskin .userstuff p {
                 ${settings.letterSpacing ? `letter-spacing: ${settings.letterSpacing} !important;` : ''}
                 ${settings.paragraphSpacing ? `margin-bottom: ${settings.paragraphSpacing} !important;` : ''}
-                ${settings.textIndent ? `text-indent: ${settings.textIndent} !important;` : ''}
+                text-indent: ${settings.enableIndent ? '2em' : '0em'} !important;
                 ${settings.justifyText ? `text-align: justify !important;` : ''}
             }
 
@@ -113,72 +113,52 @@
         styleEl.textContent = cssRules;
     }
 
-    // 3. 构建控制面板 UI 及 Navbar 菜单注入
+    // 3. 构建控制面板 UI 及 100% 还原原版 Userscripts 顶级菜单逻辑
     function createUI() {
         if (document.getElementById('ao3-wizard-ui')) return;
 
         const settings = getSettings();
 
-        // [恢复核心] 在 AO3 Navbar 追加 Userscripts 下拉菜单
-        const primaryNav = document.querySelector('#header ul.primary');
-        if (primaryNav) {
-            let userscriptMenu = primaryNav.querySelector('li.userscripts-menu');
-            if (!userscriptMenu) {
-                userscriptMenu = document.createElement('li');
-                userscriptMenu.className = 'dropdown userscripts-menu';
-                userscriptMenu.innerHTML = `
-                    <a href="#" class="dropdown-toggle" data-toggle="dropdown">Userscripts</a>
-                    <ul class="menu dropdown-menu" role="menu">
-                        <li><a id="ao3-wizard-nav-link" href="#">Site Wizard</a></li>
-                    </ul>
+        // [原版 Userscripts 菜单逻辑]
+        const mainNav = document.querySelector('#header ul.primary');
+        if (mainNav) {
+            // 查找是否已存在 Userscripts 顶级下拉菜单
+            let userscriptsMenu = mainNav.querySelector('li.dropdown.userscripts-menu');
+            let menuList = null;
+
+            if (!userscriptsMenu) {
+                // 如果不存在，创建新的 li.dropdown 菜单项
+                userscriptsMenu = document.createElement('li');
+                userscriptsMenu.className = 'dropdown userscripts-menu';
+                userscriptsMenu.innerHTML = `
+                    <a class="dropdown-toggle" data-toggle="dropdown" href="#">Userscripts</a>
+                    <ul class="menu dropdown-menu" role="menu"></ul>
                 `;
-                primaryNav.appendChild(userscriptMenu);
+                mainNav.appendChild(userscriptsMenu);
+                menuList = userscriptsMenu.querySelector('ul.dropdown-menu');
             } else {
-                const menuList = userscriptMenu.querySelector('ul.dropdown-menu');
-                if (menuList && !document.getElementById('ao3-wizard-nav-link')) {
-                    const item = document.createElement('li');
-                    item.innerHTML = `<a id="ao3-wizard-nav-link" href="#">Site Wizard</a>`;
-                    menuList.appendChild(item);
-                }
+                menuList = userscriptsMenu.querySelector('ul.dropdown-menu');
+            }
+
+            // 在 Userscripts 菜单下追加当前插件项
+            if (menuList && !document.getElementById('ao3-wizard-nav-link')) {
+                const menuItem = document.createElement('li');
+                menuItem.innerHTML = `<a id="ao3-wizard-nav-link" href="#">Site Wizard</a>`;
+                menuList.appendChild(menuItem);
             }
         }
-
-        // 创建入口浮动按钮 (⚙️)
-        const toggleBtn = document.createElement('button');
-        toggleBtn.id = 'ao3-wizard-toggle-btn';
-        toggleBtn.innerHTML = '⚙️';
-        toggleBtn.title = 'AO3 Site Wizard 设置 (Shift+Alt+W)';
-        toggleBtn.style.cssText = `
-            position: fixed;
-            bottom: 15px;
-            right: 15px;
-            z-index: 999998;
-            width: 36px;
-            height: 36px;
-            background: #900;
-            color: #fff;
-            border: none;
-            border-radius: 50%;
-            font-size: 18px;
-            cursor: pointer;
-            box-shadow: 0 2px 6px rgba(0,0,0,0.3);
-            opacity: 0.6;
-            transition: opacity 0.2s;
-        `;
-        toggleBtn.onmouseover = () => toggleBtn.style.opacity = '1';
-        toggleBtn.onmouseout = () => toggleBtn.style.opacity = '0.6';
 
         // 创建控制面板外壳
         const container = document.createElement('div');
         container.id = 'ao3-wizard-ui';
         container.style.cssText = `
             position: fixed;
-            bottom: 60px;
-            right: 15px;
+            top: 15%;
+            right: 20px;
             z-index: 999999;
             background: #fff;
             border: 2px solid #900;
-            padding: 12px 16px;
+            padding: 14px 16px;
             border-radius: 8px;
             box-shadow: 0 4px 16px rgba(0,0,0,0.25);
             font-size: 13px;
@@ -229,19 +209,18 @@
                 </label>
             </div>
 
-            <div style="display:flex; gap:8px; margin-bottom:8px;">
-                <label style="flex:1;">
+            <div style="margin-bottom:8px;">
+                <label style="display:block;">
                     最大版宽:
                     <input type="text" id="wiz-max-width" value='${settings.maxWidth}' style="width:100%; box-sizing:border-box; margin-top:2px;">
-                </label>
-                <label style="flex:1;">
-                    首行缩进:
-                    <input type="text" id="wiz-text-indent" value='${settings.textIndent}' placeholder="例: 2em" style="width:100%; box-sizing:border-box; margin-top:2px;">
                 </label>
             </div>
 
             <hr style="border:none; border-top:1px dashed #ccc; margin:8px 0;">
 
+            <label style="display:block; margin-bottom:4px;">
+                <input type="checkbox" id="wiz-indent" ${settings.enableIndent ? 'checked' : ''}> 首行缩进 2 个中文字符
+            </label>
             <label style="display:block; margin-bottom:4px;">
                 <input type="checkbox" id="wiz-justify" ${settings.justifyText ? 'checked' : ''}> 正文两端对齐
             </label>
@@ -257,23 +236,21 @@
             </div>
         `;
 
-        document.body.appendChild(toggleBtn);
         document.body.appendChild(container);
 
-        // 统一开关 UI 逻辑
+        // 显示/隐藏逻辑
         const toggleUI = (e) => {
             if (e) e.preventDefault();
             container.style.display = container.style.display === 'none' ? 'block' : 'none';
         };
 
-        // 绑定事件：顶栏 Navbar 菜单、右下角按钮、关闭按钮
+        // 绑定事件：Navbar 菜单点击 & 关闭按钮
         const navLink = document.getElementById('ao3-wizard-nav-link');
         if (navLink) navLink.addEventListener('click', toggleUI);
 
-        toggleBtn.addEventListener('click', toggleUI);
         document.getElementById('wiz-close').addEventListener('click', toggleUI);
 
-        // 快捷键: Shift + Alt + W
+        // 快捷键支持: Shift + Alt + W
         document.addEventListener('keydown', (e) => {
             if (e.shiftKey && e.altKey && e.code === 'KeyW') {
                 toggleUI();
@@ -291,7 +268,7 @@
                 letterSpacing: document.getElementById('wiz-letter-spacing').value,
                 paragraphSpacing: document.getElementById('wiz-para-spacing').value,
                 maxWidth: document.getElementById('wiz-max-width').value,
-                textIndent: document.getElementById('wiz-text-indent').value,
+                enableIndent: document.getElementById('wiz-indent').checked,
                 justifyText: document.getElementById('wiz-justify').checked,
                 highContrast: document.getElementById('wiz-contrast').checked,
                 hideNotes: document.getElementById('wiz-hide-notes').checked
