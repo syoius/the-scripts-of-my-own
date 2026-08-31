@@ -1,9 +1,9 @@
 // ==UserScript==
-// @name         AO3: Site Wizard (with LXGW WenKai Screen CDN)
+// @name         AO3: Site Wizard (with LXGW WenKai Screen CDN) - Personal Edition
 // @namespace    http://tampermonkey.net/
-// @version      1.2.0
-// @description  Customize AO3 work and site styles with LXGW WenKai Screen online font integration.
-// @author       BlackBatCat
+// @version      1.3.0
+// @description  Customize AO3 work and site styles with LXGW WenKai Screen online font and rich E-ink reading options.
+// @author       BlackBatCat (Modified by Syoius)
 // @match        *://archiveofourown.org/*
 // @match        *://*.archiveofourown.org/*
 // @grant        GM_addStyle
@@ -17,20 +17,31 @@
     const cdnFontCss = `@import url('https://cdn.jsdelivr.net/npm/lxgw-wenkai-screen-web@1.3.0/style.css');`;
     GM_addStyle(cdnFontCss);
 
-    // 默认配置（如果本地未保存设置）
+    // 默认配置
     const DEFAULT_SETTINGS = {
         enabled: true,
         siteFont: '"LXGW WenKai GB Screen", "LXGW WenKai Screen", serif',
         workFont: '"LXGW WenKai GB Screen", "LXGW WenKai Screen", serif',
         fontSize: '105%',
-        lineHeight: '1.6',
-        maxWidth: '42em'
+        lineHeight: '1.7',
+        maxWidth: '42em',
+        letterSpacing: '0.02em',
+        paragraphSpacing: '0.8em',
+        textIndent: '0em',
+        justifyText: true,
+        highContrast: true,
+        hideNotes: false
     };
 
     // 读取或初始化用户设置
     function getSettings() {
         const saved = localStorage.getItem('ao3_site_wizard_settings');
-        return saved ? JSON.parse(saved) : DEFAULT_SETTINGS;
+        if (!saved) return DEFAULT_SETTINGS;
+        try {
+            return { ...DEFAULT_SETTINGS, ...JSON.parse(saved) };
+        } catch (e) {
+            return DEFAULT_SETTINGS;
+        }
     }
 
     function saveSettings(settings) {
@@ -40,7 +51,11 @@
     // 2. 生成并注入 AO3 样式表
     function applyStyles() {
         const settings = getSettings();
-        if (!settings.enabled) return;
+        if (!settings.enabled) {
+            const oldStyle = document.getElementById('ao3-site-wizard-custom-style');
+            if (oldStyle) oldStyle.textContent = '';
+            return;
+        }
 
         const styleId = 'ao3-site-wizard-custom-style';
         let styleEl = document.getElementById(styleId);
@@ -57,7 +72,7 @@
                 font-family: ${settings.siteFont} !important;
             }` : ''}
 
-            /* 2. 正文/作品区（Workskin）针对性调整 */
+            /* 2. 正文/作品区（Workskin）基础设置 */
             #workskin,
             #workskin .userstuff,
             #workskin .userstuff p,
@@ -67,71 +82,176 @@
                 ${settings.lineHeight ? `line-height: ${settings.lineHeight} !important;` : ''}
             }
 
-            /* 3. 阅读版心宽度限制（适合墨水屏与长文阅读） */
+            /* 3. 段落细节微调（字间距、段间距、缩进、对齐） */
+            #workskin .userstuff p {
+                ${settings.letterSpacing ? `letter-spacing: ${settings.letterSpacing} !important;` : ''}
+                ${settings.paragraphSpacing ? `margin-bottom: ${settings.paragraphSpacing} !important;` : ''}
+                ${settings.textIndent ? `text-indent: ${settings.textIndent} !important;` : ''}
+                ${settings.justifyText ? `text-align: justify !important;` : ''}
+            }
+
+            /* 4. 阅读版心宽度限制 */
             #workskin .userstuff {
                 ${settings.maxWidth ? `max-width: ${settings.maxWidth} !important;` : ''}
                 margin-left: auto !important;
                 margin-right: auto !important;
             }
+
+            /* 5. 纯黑高对比度（适合墨水屏） */
+            ${settings.highContrast ? `
+            #workskin, #workskin .userstuff, #workskin .userstuff p, #workskin .userstuff * {
+                color: #000000 !important;
+            }` : ''}
+
+            /* 6. 隐藏作者前言/后记 */
+            ${settings.hideNotes ? `
+            #workskin .notes, #workskin .end.notes {
+                display: none !important;
+            }` : ''}
         `;
 
         styleEl.textContent = cssRules;
     }
 
-    // 3. 构建简单的设置控制面板 UI
+    // 3. 构建控制面板 UI
     function createUI() {
         if (document.getElementById('ao3-wizard-ui')) return;
 
         const settings = getSettings();
+
+        // 创建入口浮动按钮 (⚙️)
+        const toggleBtn = document.createElement('button');
+        toggleBtn.id = 'ao3-wizard-toggle-btn';
+        toggleBtn.innerHTML = '⚙️';
+        toggleBtn.title = 'AO3 Site Wizard 设置 (Shift+Alt+W)';
+        toggleBtn.style.cssText = `
+            position: fixed;
+            bottom: 15px;
+            right: 15px;
+            z-index: 999998;
+            width: 36px;
+            height: 36px;
+            background: #900;
+            color: #fff;
+            border: none;
+            border-radius: 50%;
+            font-size: 18px;
+            cursor: pointer;
+            box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+            opacity: 0.6;
+            transition: opacity 0.2s;
+        `;
+        toggleBtn.onmouseover = () => toggleBtn.style.opacity = '1';
+        toggleBtn.onmouseout = () => toggleBtn.style.opacity = '0.6';
+
+        // 创建控制面板外壳
         const container = document.createElement('div');
         container.id = 'ao3-wizard-ui';
         container.style.cssText = `
             position: fixed;
-            bottom: 20px;
-            right: 20px;
+            bottom: 60px;
+            right: 15px;
             z-index: 999999;
             background: #fff;
             border: 2px solid #900;
-            padding: 12px;
+            padding: 12px 16px;
             border-radius: 8px;
-            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+            box-shadow: 0 4px 16px rgba(0,0,0,0.25);
             font-size: 13px;
             color: #333;
-            max-width: 280px;
+            width: 290px;
+            max-height: 80vh;
+            overflow-y: auto;
             display: none;
+            box-sizing: border-box;
         `;
 
         container.innerHTML = `
-            <h3 style="margin:0 0 8px 0; font-size:14px; color:#900; border-bottom:1px solid #ccc; padding-bottom:4px;">AO3 Site Wizard</h3>
-            <label style="display:block; margin-bottom:6px;">
+            <div style="display:flex; justify-between; align-items:center; border-bottom:1px solid #ddd; padding-bottom:6px; margin-bottom:10px;">
+                <h3 style="margin:0; font-size:15px; color:#900;">AO3 Site Wizard</h3>
+                <span id="wiz-close" style="cursor:pointer; font-weight:bold; color:#888; font-size:16px;">✕</span>
+            </div>
+
+            <label style="display:block; margin-bottom:8px; font-weight:bold;">
                 <input type="checkbox" id="wiz-enable" ${settings.enabled ? 'checked' : ''}> 启用自定义样式
             </label>
+
+            <hr style="border:none; border-top:1px dashed #ccc; margin:8px 0;">
+
             <label style="display:block; margin-bottom:6px;">
                 正文字体 (Work Font):
-                <input type="text" id="wiz-work-font" value='${settings.workFont}' style="width:100%; box-sizing:border-box;">
+                <input type="text" id="wiz-work-font" value='${settings.workFont}' style="width:100%; box-sizing:border-box; margin-top:2px;">
             </label>
-            <label style="display:block; margin-bottom:6px;">
-                字号 (Font Size):
-                <input type="text" id="wiz-font-size" value='${settings.fontSize}' style="width:100%; box-sizing:border-box;">
+
+            <div style="display:flex; gap:8px; margin-bottom:6px;">
+                <label style="flex:1;">
+                    字号:
+                    <input type="text" id="wiz-font-size" value='${settings.fontSize}' style="width:100%; box-sizing:border-box; margin-top:2px;">
+                </label>
+                <label style="flex:1;">
+                    行高:
+                    <input type="text" id="wiz-line-height" value='${settings.lineHeight}' style="width:100%; box-sizing:border-box; margin-top:2px;">
+                </label>
+            </div>
+
+            <div style="display:flex; gap:8px; margin-bottom:6px;">
+                <label style="flex:1;">
+                    字间距:
+                    <input type="text" id="wiz-letter-spacing" value='${settings.letterSpacing}' style="width:100%; box-sizing:border-box; margin-top:2px;">
+                </label>
+                <label style="flex:1;">
+                    段间距:
+                    <input type="text" id="wiz-para-spacing" value='${settings.paragraphSpacing}' style="width:100%; box-sizing:border-box; margin-top:2px;">
+                </label>
+            </div>
+
+            <div style="display:flex; gap:8px; margin-bottom:8px;">
+                <label style="flex:1;">
+                    最大版宽:
+                    <input type="text" id="wiz-max-width" value='${settings.maxWidth}' style="width:100%; box-sizing:border-box; margin-top:2px;">
+                </label>
+                <label style="flex:1;">
+                    首行缩进:
+                    <input type="text" id="wiz-text-indent" value='${settings.textIndent}' placeholder="例: 2em" style="width:100%; box-sizing:border-box; margin-top:2px;">
+                </label>
+            </div>
+
+            <hr style="border:none; border-top:1px dashed #ccc; margin:8px 0;">
+
+            <label style="display:block; margin-bottom:4px;">
+                <input type="checkbox" id="wiz-justify" ${settings.justifyText ? 'checked' : ''}> 正文两端对齐
             </label>
-            <label style="display:block; margin-bottom:8px;">
-                行高 (Line Height):
-                <input type="text" id="wiz-line-height" value='${settings.lineHeight}' style="width:100%; box-sizing:border-box;">
+            <label style="display:block; margin-bottom:4px;">
+                <input type="checkbox" id="wiz-contrast" ${settings.highContrast ? 'checked' : ''}> 强制纯黑高对比文字
             </label>
+            <label style="display:block; margin-bottom:12px;">
+                <input type="checkbox" id="wiz-hide-notes" ${settings.hideNotes ? 'checked' : ''}> 隐藏作者前言/后记 (Notes)
+            </label>
+
             <div style="text-align:right;">
-                <button id="wiz-save" style="background:#900; color:#fff; border:none; padding:4px 12px; border-radius:4px; cursor:pointer;">保存生效</button>
+                <button id="wiz-save" style="background:#900; color:#fff; border:none; padding:6px 14px; border-radius:4px; cursor:pointer; font-weight:bold;">保存并生效</button>
             </div>
         `;
 
+        document.body.appendChild(toggleBtn);
         document.body.appendChild(container);
 
-        // 快捷键打开面板: Shift + Alt + W
+        // 绑定交互逻辑
+        const toggleUI = () => {
+            container.style.display = container.style.display === 'none' ? 'block' : 'none';
+        };
+
+        toggleBtn.addEventListener('click', toggleUI);
+        document.getElementById('wiz-close').addEventListener('click', toggleUI);
+
+        // 快捷键: Shift + Alt + W
         document.addEventListener('keydown', (e) => {
             if (e.shiftKey && e.altKey && e.code === 'KeyW') {
-                container.style.display = container.style.display === 'none' ? 'block' : 'none';
+                toggleUI();
             }
         });
 
+        // 保存逻辑
         document.getElementById('wiz-save').addEventListener('click', () => {
             const newSettings = {
                 enabled: document.getElementById('wiz-enable').checked,
@@ -139,11 +259,17 @@
                 workFont: document.getElementById('wiz-work-font').value,
                 fontSize: document.getElementById('wiz-font-size').value,
                 lineHeight: document.getElementById('wiz-line-height').value,
-                maxWidth: settings.maxWidth
+                letterSpacing: document.getElementById('wiz-letter-spacing').value,
+                paragraphSpacing: document.getElementById('wiz-para-spacing').value,
+                maxWidth: document.getElementById('wiz-max-width').value,
+                textIndent: document.getElementById('wiz-text-indent').value,
+                justifyText: document.getElementById('wiz-justify').checked,
+                highContrast: document.getElementById('wiz-contrast').checked,
+                hideNotes: document.getElementById('wiz-hide-notes').checked
             };
             saveSettings(newSettings);
             applyStyles();
-            alert('设置已保存并应用！');
+            container.style.display = 'none';
         });
     }
 
