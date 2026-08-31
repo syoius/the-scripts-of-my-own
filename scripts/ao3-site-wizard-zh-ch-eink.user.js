@@ -2,9 +2,9 @@
 // @name         AO3: Site Wizard - ZH-CN & E-Ink Reader Optimised
 // @name:zh-CN   AO3：Site Wizard - 中文 & 墨水屏设备优化版
 // @namespace    https://greasyfork.org/users/1639523-syoius
-// @version      1.8.9
-// @description  A compact reading-focused edition of AO3: Site Wizard with LXGW WenKai, enhanced blank-line cleanup, GM storage, and configurable reading layout.
-// @description:zh-CN  AO3 阅读优化脚本：集成霞鹜文楷、正文排版、异常空行清理、GM 设置存储、高对比度模式及紧凑触控设置面板。
+// @version      1.9.0
+// @description  A compact reading-focused edition of AO3: Site Wizard with LXGW WenKai, enhanced blank-line cleanup, resilient settings storage, and configurable reading layout.
+// @description:zh-CN  AO3 阅读优化脚本：集成霞鹜文楷、正文排版、异常空行清理、兼容式设置存储、高对比度模式及紧凑触控设置面板。
 // @author       syoius
 // @match        *://archiveofourown.org/*
 // @match        *://*.archiveofourown.org/*
@@ -34,8 +34,8 @@
  * - special handling for ACE-generated pseudo blank lines
  * - cleanup of Unicode / zero-width whitespace
  * - MutationObserver-based cleanup of dynamically inserted content
- * - GM Storage instead of AO3 localStorage
- * - automatic migration of legacy localStorage settings
+ * - timestamped GM Storage with an AO3 localStorage fallback
+ * - automatic recovery from unavailable or non-persistent GM APIs
  * - compact settings panel designed for desktop, tablet, and e-ink devices
  * - save-without-closing settings workflow
  * - high-contrast black-text / white-background reading mode
@@ -150,15 +150,13 @@
 
 
     // ============================================================
-    // 3. GM Storage
+    // 3. Resilient settings storage
     // ============================================================
 
     /*
-     * Settings are stored in the userscript manager rather than AO3's
-     * localStorage.
-     *
-     * When upgrading from an older version of this edition, existing
-     * localStorage settings are automatically migrated once.
+     * Settings are mirrored to GM Storage and AO3 localStorage. The
+     * timestamp lets the newest valid copy win while localStorage keeps
+     * settings persistent in browsers with incomplete GM_* support.
      */
 
     function normalizeStoredSettings(value) {
@@ -194,81 +192,226 @@
     }
 
 
-    function getSettings() {
+    function getStorageRevision(settings) {
 
-        const stored =
-            normalizeStoredSettings(
-                GM_getValue(
-                    SETTINGS_KEY,
-                    null
-                )
+        const revision =
+            Number(
+                settings &&
+                settings._storageUpdatedAt
             );
 
 
-        // --------------------------------------------------------
-        // Existing GM Storage settings
-        // --------------------------------------------------------
+        return Number.isFinite(revision)
+            ? revision
+            : 0;
+    }
 
-        if (stored) {
 
-            return {
-                ...DEFAULT_SETTINGS,
-                ...stored
-            };
+    function readGmSettings() {
+
+        if (
+            typeof GM_getValue !==
+            'function'
+        ) {
+            return null;
         }
 
 
-        // --------------------------------------------------------
-        // Legacy localStorage migration
-        // --------------------------------------------------------
-
         try {
 
-            const legacyRaw =
-                window.localStorage.getItem(
-                    SETTINGS_KEY
+            const value =
+                GM_getValue(
+                    SETTINGS_KEY,
+                    null
                 );
 
 
-            if (legacyRaw) {
+            /*
+             * The legacy GM_getValue API is synchronous. Some partial
+             * implementations return a Promise instead; the synchronous
+             * settings flow uses localStorage in that case.
+             */
 
-                const legacy =
-                    normalizeStoredSettings(
-                        legacyRaw
-                    );
-
-
-                if (legacy) {
-
-                    GM_setValue(
-                        SETTINGS_KEY,
-                        legacy
-                    );
-
-
-                    window.localStorage.removeItem(
-                        SETTINGS_KEY
-                    );
+            if (
+                value &&
+                typeof value.then ===
+                    'function'
+            ) {
+                return null;
+            }
 
 
-                    console.info(
-                        '[AO3 Site Wizard] Settings migrated from localStorage to GM Storage.'
-                    );
+            return normalizeStoredSettings(
+                value
+            );
+
+        } catch (error) {
+
+            console.warn(
+                '[AO3 Site Wizard] Unable to read GM Storage:',
+                error
+            );
+
+            return null;
+        }
+    }
 
 
-                    return {
-                        ...DEFAULT_SETTINGS,
-                        ...legacy
-                    };
-                }
+    function readLocalSettings() {
+
+        try {
+
+            return normalizeStoredSettings(
+                window.localStorage.getItem(
+                    SETTINGS_KEY
+                )
+            );
+
+        } catch (error) {
+
+            console.warn(
+                '[AO3 Site Wizard] Unable to read localStorage fallback:',
+                error
+            );
+
+            return null;
+        }
+    }
+
+
+    function writeGmSettings(settings) {
+
+        if (
+            typeof GM_setValue !==
+            'function'
+        ) {
+            return;
+        }
+
+
+        try {
+
+            const result =
+                GM_setValue(
+                    SETTINGS_KEY,
+                    settings
+                );
+
+
+            if (
+                result &&
+                typeof result.catch ===
+                    'function'
+            ) {
+                result.catch(
+                    error => {
+
+                        console.warn(
+                            '[AO3 Site Wizard] Unable to write GM Storage:',
+                            error
+                        );
+                    }
+                );
             }
 
         } catch (error) {
 
             console.warn(
-                '[AO3 Site Wizard] Legacy settings migration failed:',
+                '[AO3 Site Wizard] Unable to write GM Storage:',
                 error
             );
+        }
+    }
+
+
+    function writeLocalSettings(settings) {
+
+        try {
+
+            window.localStorage.setItem(
+                SETTINGS_KEY,
+                JSON.stringify(settings)
+            );
+
+        } catch (error) {
+
+            console.warn(
+                '[AO3 Site Wizard] Unable to write localStorage fallback:',
+                error
+            );
+        }
+    }
+
+
+    function getSettings() {
+
+        const gmStored =
+            readGmSettings();
+
+
+        const localStored =
+            readLocalSettings();
+
+
+        // --------------------------------------------------------
+        // Select the newest valid copy
+        // --------------------------------------------------------
+
+        let stored =
+            null;
+
+
+        if (
+            gmStored &&
+            localStored
+        ) {
+
+            stored =
+                getStorageRevision(
+                    localStored
+                ) >
+                getStorageRevision(
+                    gmStored
+                )
+                    ? localStored
+                    : gmStored;
+
+        } else {
+
+            stored =
+                gmStored ||
+                localStored;
+        }
+
+
+        if (stored) {
+
+            /*
+             * Seed or refresh the local fallback when GM Storage has the
+             * newer copy. This only writes when the copies differ.
+             */
+
+            if (
+                stored === gmStored &&
+                (
+                    !localStored ||
+                    getStorageRevision(
+                        gmStored
+                    ) >
+                    getStorageRevision(
+                        localStored
+                    )
+                )
+            ) {
+                writeLocalSettings(
+                    gmStored
+                );
+            }
+
+            return {
+                ...DEFAULT_SETTINGS,
+                ...stored
+            };
         }
 
 
@@ -280,10 +423,16 @@
 
     function saveSettings(settings) {
 
-        GM_setValue(
-            SETTINGS_KEY,
-            settings
-        );
+        const stored = {
+            ...settings,
+            _storageUpdatedAt:
+                Date.now()
+        };
+
+
+        writeGmSettings(stored);
+
+        writeLocalSettings(stored);
     }
 
 
