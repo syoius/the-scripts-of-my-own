@@ -2,7 +2,7 @@
 // @name         AO3: Site Wizard - ZH-CN & E-Ink Reader Optimised
 // @name:zh-CN   AO3：Site Wizard - 中文 & 墨水屏设备优化版
 // @namespace    https://greasyfork.org/users/1639523-syoius
-// @version      1.8.5
+// @version      1.8.9
 // @description  A compact reading-focused edition of AO3: Site Wizard with LXGW WenKai, enhanced blank-line cleanup, GM storage, and configurable reading layout.
 // @description:zh-CN  AO3 阅读优化脚本：集成霞鹜文楷、正文排版、异常空行清理、GM 设置存储、高对比度模式及紧凑触控设置面板。
 // @author       syoius
@@ -30,6 +30,7 @@
  *
  * - LXGW WenKai Screen as the default reading font
  * - enhanced removal of empty paragraphs and nested blank elements
+ * - optional spacing between adjacent Chinese and English text
  * - special handling for ACE-generated pseudo blank lines
  * - cleanup of Unicode / zero-width whitespace
  * - MutationObserver-based cleanup of dynamically inserted content
@@ -132,6 +133,9 @@
             false,
 
         cleanBreaks:
+            true,
+
+        spaceCjkEnglish:
             true,
 
         justifyText:
@@ -585,7 +589,286 @@
 
 
     // ============================================================
-    // 6. Dynamic work-content observer
+    // 6. Chinese / English spacing
+    // ============================================================
+
+    const HAN_CHARACTER =
+        /[\u3400-\u4DBF\u4E00-\u9FFF\uF900-\uFAFF]/;
+
+
+    const ASCII_WORD_CHARACTER =
+        /[A-Za-z0-9]/;
+
+
+    const TEXT_FLOW_BOUNDARY_TAGS =
+        new Set([
+            'ADDRESS',
+            'ARTICLE',
+            'ASIDE',
+            'BLOCKQUOTE',
+            'BR',
+            'DD',
+            'DIV',
+            'DL',
+            'DT',
+            'FIGCAPTION',
+            'FIGURE',
+            'FOOTER',
+            'FORM',
+            'H1',
+            'H2',
+            'H3',
+            'H4',
+            'H5',
+            'H6',
+            'HEADER',
+            'HR',
+            'LI',
+            'MAIN',
+            'NAV',
+            'OL',
+            'P',
+            'SECTION',
+            'TABLE',
+            'TBODY',
+            'TD',
+            'TFOOT',
+            'TH',
+            'THEAD',
+            'TR',
+            'UL'
+        ]);
+
+
+    const SPACING_EXCLUDED_TAGS =
+        new Set([
+            'AUDIO',
+            'BUTTON',
+            'CANVAS',
+            'CODE',
+            'EMBED',
+            'IFRAME',
+            'IMG',
+            'INPUT',
+            'KBD',
+            'MATH',
+            'NOSCRIPT',
+            'OBJECT',
+            'OPTION',
+            'PRE',
+            'RUBY',
+            'SAMP',
+            'SCRIPT',
+            'SELECT',
+            'STYLE',
+            'SVG',
+            'TEMPLATE',
+            'TEXTAREA',
+            'VIDEO',
+            'WBR'
+        ]);
+
+
+    function needsCjkEnglishSpace(left, right) {
+
+        return (
+            HAN_CHARACTER.test(left) &&
+            ASCII_WORD_CHARACTER.test(right)
+        ) || (
+            ASCII_WORD_CHARACTER.test(left) &&
+            HAN_CHARACTER.test(right)
+        );
+    }
+
+
+    function addSpacingWithinText(text) {
+
+        return text
+            .replace(
+                /([\u3400-\u4DBF\u4E00-\u9FFF\uF900-\uFAFF])([A-Za-z0-9])/g,
+                '$1 $2'
+            )
+            .replace(
+                /([A-Za-z0-9])([\u3400-\u4DBF\u4E00-\u9FFF\uF900-\uFAFF])/g,
+                '$1 $2'
+            );
+    }
+
+
+    function addSpacingToRoot(root) {
+
+        let previousTextNode =
+            null;
+
+
+        function visit(node) {
+
+            if (
+                node.nodeType ===
+                Node.TEXT_NODE
+            ) {
+
+                const originalText =
+                    node.nodeValue || '';
+
+
+                if (!originalText) {
+                    return;
+                }
+
+
+                let spacedText =
+                    addSpacingWithinText(
+                        originalText
+                    );
+
+
+                if (
+                    previousTextNode &&
+                    needsCjkEnglishSpace(
+                        previousTextNode
+                            .nodeValue
+                            .slice(-1),
+                        spacedText.charAt(0)
+                    )
+                ) {
+                    spacedText =
+                        ` ${spacedText}`;
+                }
+
+
+                if (
+                    spacedText !==
+                    originalText
+                ) {
+                    node.nodeValue =
+                        spacedText;
+                }
+
+
+                const lastCharacter =
+                    spacedText.slice(-1);
+
+
+                previousTextNode =
+                    HAN_CHARACTER.test(
+                        lastCharacter
+                    ) ||
+                    ASCII_WORD_CHARACTER.test(
+                        lastCharacter
+                    )
+                        ? node
+                        : null;
+
+
+                return;
+            }
+
+
+            if (
+                node.nodeType !==
+                Node.ELEMENT_NODE
+            ) {
+                return;
+            }
+
+
+            const element =
+                node;
+
+
+            if (
+                SPACING_EXCLUDED_TAGS.has(
+                    element.tagName
+                ) ||
+                element.isContentEditable ||
+                element.getAttribute(
+                    'aria-hidden'
+                ) === 'true'
+            ) {
+                previousTextNode =
+                    null;
+
+                return;
+            }
+
+
+            const isTextFlowBoundary =
+                TEXT_FLOW_BOUNDARY_TAGS.has(
+                    element.tagName
+                );
+
+
+            if (isTextFlowBoundary) {
+                previousTextNode =
+                    null;
+            }
+
+
+            for (
+                let child =
+                    element.firstChild;
+                child;
+                child =
+                    child.nextSibling
+            ) {
+                visit(child);
+            }
+
+
+            if (isTextFlowBoundary) {
+                previousTextNode =
+                    null;
+            }
+        }
+
+
+        for (
+            let child =
+                root.firstChild;
+            child;
+            child =
+                child.nextSibling
+        ) {
+            visit(child);
+        }
+    }
+
+
+    function addCjkEnglishSpacing() {
+
+        const settings =
+            getSettings();
+
+
+        if (
+            !settings.enabled ||
+            !settings.spaceCjkEnglish
+        ) {
+            return;
+        }
+
+
+        document
+            .querySelectorAll(
+                '#workskin .userstuff'
+            )
+            .forEach(
+                addSpacingToRoot
+            );
+    }
+
+
+    function processWorkContent() {
+
+        cleanExtraBreaks();
+
+        addCjkEnglishSpacing();
+    }
+
+
+    // ============================================================
+    // 7. Dynamic work-content observer
     // ============================================================
 
     let workObserver =
@@ -630,7 +913,7 @@
 
                     cleanTimer =
                         setTimeout(
-                            cleanExtraBreaks,
+                            processWorkContent,
                             120
                         );
                 }
@@ -648,7 +931,7 @@
 
 
     // ============================================================
-    // 7. Reading styles
+    // 8. Reading styles
     // ============================================================
 
     function applyStyles() {
@@ -865,12 +1148,12 @@
         `;
 
 
-        cleanExtraBreaks();
+        processWorkContent();
     }
 
 
     // ============================================================
-    // 8. Compact settings-panel CSS
+    // 9. Compact settings-panel CSS
     // ============================================================
 
     function injectWizardStyles() {
@@ -1068,11 +1351,23 @@
                 padding:
                     0;
 
+                -webkit-appearance:
+                    none !important;
+
+                appearance:
+                    none !important;
+
                 border:
-                    none;
+                    0 !important;
 
                 border-radius:
                     5px;
+
+                box-shadow:
+                    none !important;
+
+                text-shadow:
+                    none !important;
 
                 background:
                     transparent;
@@ -1101,7 +1396,14 @@
 
 
             #ao3-wizard-ui .wiz-close-button:hover,
-            #ao3-wizard-ui .wiz-close-button:focus {
+            #ao3-wizard-ui .wiz-close-button:focus,
+            #ao3-wizard-ui .wiz-close-button:active {
+
+                border:
+                    0 !important;
+
+                box-shadow:
+                    none !important;
 
                 background:
                     #eeeeee;
@@ -1276,6 +1578,24 @@
             .wiz-toggle-row
             input[type="checkbox"] {
 
+                -webkit-appearance:
+                    none !important;
+
+                appearance:
+                    none !important;
+
+                position:
+                    static !important;
+
+                display:
+                    flex;
+
+                align-items:
+                    center;
+
+                justify-content:
+                    center;
+
                 flex:
                     0 0 20px;
 
@@ -1292,13 +1612,101 @@
                     20px;
 
                 margin:
-                    0;
+                    0 !important;
+
+                padding:
+                    0 !important;
+
+                border:
+                    1px solid #777777 !important;
+
+                border-radius:
+                    50%;
+
+                background:
+                    #ffffff !important;
+
+                box-shadow:
+                    none !important;
+
+                transform:
+                    none !important;
+
+                vertical-align:
+                    middle;
 
                 cursor:
                     pointer;
 
+                opacity:
+                    1;
+
+                transition:
+                    none;
+
                 accent-color:
-                    #990000;
+                    auto;
+            }
+
+
+            #ao3-wizard-ui
+            .wiz-toggle-row
+            input[type="checkbox"]::before {
+
+                content:
+                    "";
+
+                width:
+                    5px;
+
+                height:
+                    9px;
+
+                border-right:
+                    2px solid #ffffff;
+
+                border-bottom:
+                    2px solid #ffffff;
+
+                opacity:
+                    0;
+
+                transform:
+                    translateY(-1px)
+                    rotate(45deg);
+            }
+
+
+            #ao3-wizard-ui
+            .wiz-toggle-row
+            input[type="checkbox"]:checked {
+
+                border-color:
+                    #990000 !important;
+
+                background:
+                    #990000 !important;
+            }
+
+
+            #ao3-wizard-ui
+            .wiz-toggle-row
+            input[type="checkbox"]:checked::before {
+
+                opacity:
+                    1;
+            }
+
+
+            #ao3-wizard-ui
+            .wiz-toggle-row
+            input[type="checkbox"]:focus-visible {
+
+                outline:
+                    2px solid #990000;
+
+                outline-offset:
+                    2px;
             }
 
 
@@ -1458,7 +1866,7 @@
 
 
     // ============================================================
-    // 9. HTML attribute escaping
+    // 10. HTML attribute escaping
     // ============================================================
 
     function escapeHtmlAttribute(value) {
@@ -1488,7 +1896,7 @@
 
 
     // ============================================================
-    // 10. Settings panel
+    // 11. Settings panel
     // ============================================================
 
     function createUI() {
@@ -1673,7 +2081,7 @@
                         href="javascript:void(0);"
                         id="opencfg_site_wizard"
                     >
-                        Site Wizard
+                        Site Wizard - 优化版
                     </a>
                 `;
 
@@ -1872,6 +2280,25 @@
 
                 <span class="wiz-toggle-label">
                     移除多余空行 / 空段落
+                </span>
+
+            </label>
+
+
+            <label class="wiz-toggle-row">
+
+                <input
+                    type="checkbox"
+                    id="wiz-space-cjk-english"
+                    ${
+                        settings.spaceCjkEnglish
+                            ? 'checked'
+                            : ''
+                    }
+                >
+
+                <span class="wiz-toggle-label">
+                    中英文之间自动加空格
                 </span>
 
             </label>
@@ -2167,6 +2594,14 @@
                             .checked,
 
 
+                    spaceCjkEnglish:
+                        document
+                            .getElementById(
+                                'wiz-space-cjk-english'
+                            )
+                            .checked,
+
+
                     enableIndent:
                         document
                             .getElementById(
@@ -2263,14 +2698,14 @@
 
 
     // ============================================================
-    // 11. Initialization
+    // 12. Initialization
     // ============================================================
 
     /*
      * Apply the reading CSS as early as possible.
      *
      * At document-start the work body may not exist yet;
-     * cleanExtraBreaks() safely exits in that situation.
+     * processWorkContent() safely exits in that situation.
      */
 
     applyStyles();
@@ -2287,7 +2722,7 @@
         // Initial cleanup
         // --------------------------------------------------------
 
-        cleanExtraBreaks();
+        processWorkContent();
 
 
         // --------------------------------------------------------
@@ -2303,13 +2738,13 @@
          */
 
         setTimeout(
-            cleanExtraBreaks,
+            processWorkContent,
             250
         );
 
 
         setTimeout(
-            cleanExtraBreaks,
+            processWorkContent,
             1000
         );
     }
