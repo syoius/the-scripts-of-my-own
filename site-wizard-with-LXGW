@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         AO3: Site Wizard (with LXGW WenKai Screen CDN & e-ink optimization)
+// @name         AO3: Site Wizard (with LXGW WenKai Screen CDN & E-ink optimization)
 // @namespace    http://tampermonkey.net/
-// @version      1.7.1
-// @description  Customize AO3 work and site styles with LXGW WenKai Screen online font, cleanup extra line breaks/empty paragraphs, and share Userscripts navbar menu.
+// @version      1.8.0
+// @description  Customize AO3 work and site styles with LXGW WenKai Screen online font, cleanup extra line breaks/empty paragraphs, share scriptconfig navbar menu, and force high contrast white background.
 // @author       BlackBatCat (Modified)
 // @match        *://archiveofourown.org/*
 // @match        *://*.archiveofourown.org/*
@@ -17,7 +17,7 @@
     const cdnFontCss = `@import url('https://cdn.jsdelivr.net/npm/lxgw-wenkai-screen-web@latest/style.css');`;
     GM_addStyle(cdnFontCss);
 
-    // 默认配置（字号改为 115%，包含清理空行选项）
+    // 默认配置（字号 115%）
     const DEFAULT_SETTINGS = {
         enabled: true,
         siteFont: '"LXGW WenKai GB Screen", "LXGW WenKai Screen", serif',
@@ -28,7 +28,7 @@
         letterSpacing: '0.02em',
         paragraphSpacing: '0.8em',
         enableIndent: false, // 缩进开关：开 = 2em, 关 = 0em
-        cleanBreaks: true,  // 新增：自动清理多余的空行/空段落
+        cleanBreaks: true,  // 自动清理多余空行/空段落
         justifyText: true,
         highContrast: true,
         hideNotes: false
@@ -57,7 +57,7 @@
         const userstuff = document.querySelector('#workskin .userstuff');
         if (!userstuff) return;
 
-        // 1. 移除空段落（包含只有空格、&nbsp; 或连续 br 的 p 标签）
+        // 1. 移除空段落（包含只有空格、&nbsp; 或无实质内容的 p 标签）
         const paragraphs = userstuff.querySelectorAll('p');
         paragraphs.forEach(p => {
             const textContent = p.textContent.replace(/\u00a0/g, ' ').trim();
@@ -128,11 +128,11 @@
                 margin-right: auto !important;
             }
 
-            /* 5. 纯黑高对比度（适合墨水屏） */
+            /* 5. 选项 B：纯黑高对比度 + 全局背景纯白 */
             ${settings.highContrast ? `
             body, #outer, #inner, #workskin, #workskin .userstuff, #workskin .userstuff * {
                 color: #000000 !important;
-                background-color: #ffffff !important; /* 新增：全局背景强制纯白 */
+                background-color: #ffffff !important;
             }` : ''}
 
             /* 6. 隐藏作者前言/后记 */
@@ -146,17 +146,19 @@
         cleanExtraBreaks();
     }
 
-    // 3. 构建控制面板 UI 及原作者兼容的 Userscripts 顶级菜单共享逻辑
+    // 3. 构建控制面板 UI 及精准兼容 #scriptconfig 的 Userscripts 菜单挂载逻辑
     function createUI() {
         if (document.getElementById('ao3-wizard-ui')) return;
 
         const settings = getSettings();
 
-        // 原作者全家桶通用的 Navbar 寻找与挂载逻辑
+        // 挂载到主导航栏的 #scriptconfig 菜单
         const primaryNav = document.querySelector('#header ul.primary');
         if (primaryNav) {
-            let userscriptMenu = primaryNav.querySelector('li.userscripts, li.userscript, li.dropdown[menu="userscripts"]');
+            // 1. 精准寻找 id="scriptconfig" 的节点
+            let userscriptMenu = primaryNav.querySelector('li#scriptconfig');
 
+            // 2. 没找到 id 时，退回模糊查找文本包含 Userscripts 的下拉菜单
             if (!userscriptMenu) {
                 const lis = primaryNav.querySelectorAll('li.dropdown');
                 for (let li of lis) {
@@ -171,21 +173,24 @@
             let menuList = null;
 
             if (userscriptMenu) {
-                menuList = userscriptMenu.querySelector('ul');
+                menuList = userscriptMenu.querySelector('ul.menu');
             } else {
+                // 3. 如果完全没有，建立标准 #scriptconfig 结构
                 userscriptMenu = document.createElement('li');
-                userscriptMenu.className = 'dropdown userscripts';
+                userscriptMenu.className = 'dropdown';
+                userscriptMenu.id = 'scriptconfig';
                 userscriptMenu.innerHTML = `
-                    <a class="dropdown-toggle" data-toggle="dropdown" href="#">Userscripts</a>
+                    <a class="dropdown-toggle" href="/" data-toggle="dropdown" data-target="#">Userscripts</a>
                     <ul class="menu dropdown-menu" role="menu"></ul>
                 `;
                 primaryNav.appendChild(userscriptMenu);
-                menuList = userscriptMenu.querySelector('ul');
+                menuList = userscriptMenu.querySelector('ul.menu');
             }
 
-            if (menuList && !document.getElementById('ao3-wizard-nav-link')) {
+            // 4. 追加本项目菜单项（避免重复追加）
+            if (menuList && !document.getElementById('opencfg_site_wizard')) {
                 const menuItem = document.createElement('li');
-                menuItem.innerHTML = `<a id="ao3-wizard-nav-link" href="#">Site Wizard</a>`;
+                menuItem.innerHTML = `<a href="javascript:void(0);" id="opencfg_site_wizard">Site Wizard</a>`;
                 menuList.appendChild(menuItem);
             }
         }
@@ -270,7 +275,7 @@
                 <input type="checkbox" id="wiz-justify" ${settings.justifyText ? 'checked' : ''}> 正文两端对齐
             </label>
             <label style="display:block; margin-bottom:4px;">
-                <input type="checkbox" id="wiz-contrast" ${settings.highContrast ? 'checked' : ''}> 强制纯黑高对比文字
+                <input type="checkbox" id="wiz-contrast" ${settings.highContrast ? 'checked' : ''}> 强制纯黑文字 + 纯白背景
             </label>
             <label style="display:block; margin-bottom:12px;">
                 <input type="checkbox" id="wiz-hide-notes" ${settings.hideNotes ? 'checked' : ''}> 隐藏作者前言/后记 (Notes)
@@ -289,13 +294,13 @@
             container.style.display = container.style.display === 'none' ? 'block' : 'none';
         };
 
-        // 事件绑定：菜单项点击 & 关闭按钮
-        const navLink = document.getElementById('ao3-wizard-nav-link');
+        // 事件绑定：绑定给全新的链接 ID #opencfg_site_wizard
+        const navLink = document.getElementById('opencfg_site_wizard');
         if (navLink) navLink.addEventListener('click', toggleUI);
 
         document.getElementById('wiz-close').addEventListener('click', toggleUI);
 
-        // 快捷键: Shift + Alt + W
+        // 快捷键保留: Shift + Alt + W
         document.addEventListener('keydown', (e) => {
             if (e.shiftKey && e.altKey && e.code === 'KeyW') {
                 toggleUI();
