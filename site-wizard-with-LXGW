@@ -1,9 +1,9 @@
 // ==UserScript==
 // @name         AO3: Site Wizard (with LXGW WenKai Screen CDN) - Personal Edition
 // @namespace    http://tampermonkey.net/
-// @version      1.3.0
-// @description  Customize AO3 work and site styles with LXGW WenKai Screen online font and rich E-ink reading options.
-// @author       BlackBatCat (Modified by Syoius)
+// @version      1.3.1
+// @description  Customize AO3 work and site styles with LXGW WenKai Screen online font, Navbar integration, and rich E-ink reading options.
+// @author       BlackBatCat (Modified by syoius)
 // @match        *://archiveofourown.org/*
 // @match        *://*.archiveofourown.org/*
 // @grant        GM_addStyle
@@ -113,11 +113,35 @@
         styleEl.textContent = cssRules;
     }
 
-    // 3. 构建控制面板 UI
+    // 3. 构建控制面板 UI 及 Navbar 菜单注入
     function createUI() {
         if (document.getElementById('ao3-wizard-ui')) return;
 
         const settings = getSettings();
+
+        // [恢复核心] 在 AO3 Navbar 追加 Userscripts 下拉菜单
+        const primaryNav = document.querySelector('#header ul.primary');
+        if (primaryNav) {
+            let userscriptMenu = primaryNav.querySelector('li.userscripts-menu');
+            if (!userscriptMenu) {
+                userscriptMenu = document.createElement('li');
+                userscriptMenu.className = 'dropdown userscripts-menu';
+                userscriptMenu.innerHTML = `
+                    <a href="#" class="dropdown-toggle" data-toggle="dropdown">Userscripts</a>
+                    <ul class="menu dropdown-menu" role="menu">
+                        <li><a id="ao3-wizard-nav-link" href="#">Site Wizard</a></li>
+                    </ul>
+                `;
+                primaryNav.appendChild(userscriptMenu);
+            } else {
+                const menuList = userscriptMenu.querySelector('ul.dropdown-menu');
+                if (menuList && !document.getElementById('ao3-wizard-nav-link')) {
+                    const item = document.createElement('li');
+                    item.innerHTML = `<a id="ao3-wizard-nav-link" href="#">Site Wizard</a>`;
+                    menuList.appendChild(item);
+                }
+            }
+        }
 
         // 创建入口浮动按钮 (⚙️)
         const toggleBtn = document.createElement('button');
@@ -167,7 +191,7 @@
         `;
 
         container.innerHTML = `
-            <div style="display:flex; justify-between; align-items:center; border-bottom:1px solid #ddd; padding-bottom:6px; margin-bottom:10px;">
+            <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid #ddd; padding-bottom:6px; margin-bottom:10px;">
                 <h3 style="margin:0; font-size:15px; color:#900;">AO3 Site Wizard</h3>
                 <span id="wiz-close" style="cursor:pointer; font-weight:bold; color:#888; font-size:16px;">✕</span>
             </div>
@@ -236,10 +260,15 @@
         document.body.appendChild(toggleBtn);
         document.body.appendChild(container);
 
-        // 绑定交互逻辑
-        const toggleUI = () => {
+        // 统一开关 UI 逻辑
+        const toggleUI = (e) => {
+            if (e) e.preventDefault();
             container.style.display = container.style.display === 'none' ? 'block' : 'none';
         };
+
+        // 绑定事件：顶栏 Navbar 菜单、右下角按钮、关闭按钮
+        const navLink = document.getElementById('ao3-wizard-nav-link');
+        if (navLink) navLink.addEventListener('click', toggleUI);
 
         toggleBtn.addEventListener('click', toggleUI);
         document.getElementById('wiz-close').addEventListener('click', toggleUI);
