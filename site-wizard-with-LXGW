@@ -1,9 +1,9 @@
 // ==UserScript==
-// @name         AO3: Site Wizard (with LXGW WenKai Screen CDN & E-ink optimization)
+// @name         AO3: Site Wizard (with LXGW WenKai Screen CDN & e-ink optimization)
 // @namespace    http://tampermonkey.net/
-// @version      1.8.0
+// @version      1.8.4
 // @description  Customize AO3 work and site styles with LXGW WenKai Screen online font, cleanup extra line breaks/empty paragraphs, share scriptconfig navbar menu, and force high contrast white background.
-// @author       BlackBatCat (Modified)
+// @author       BlackBatCat (Modified by syoius)
 // @match        *://archiveofourown.org/*
 // @match        *://*.archiveofourown.org/*
 // @grant        GM_addStyle
@@ -13,332 +13,1329 @@
 (function () {
     'use strict';
 
+    // ============================================================
     // 1. 注入 JSDelivr 提供的霞鹜文楷屏幕版 CSS CDN
-    const cdnFontCss = `@import url('https://cdn.jsdelivr.net/npm/lxgw-wenkai-screen-web@latest/style.css');`;
+    // ============================================================
+
+    const cdnFontCss = `
+        @import url('https://cdn.jsdelivr.net/npm/lxgw-wenkai-screen-web@latest/style.css');
+    `;
+
     GM_addStyle(cdnFontCss);
 
-    // 默认配置（字号 115%）
+
+    // ============================================================
+    // 2. 默认配置
+    // ============================================================
+
     const DEFAULT_SETTINGS = {
         enabled: true,
-        siteFont: '"LXGW WenKai GB Screen", "LXGW WenKai Screen", serif',
-        workFont: '"LXGW WenKai GB Screen", "LXGW WenKai Screen", serif',
+
+        siteFont:
+            '"LXGW WenKai GB Screen", "LXGW WenKai Screen", serif',
+
+        workFont:
+            '"LXGW WenKai GB Screen", "LXGW WenKai Screen", serif',
+
         fontSize: '115%',
         lineHeight: '1.7',
         maxWidth: '42em',
         letterSpacing: '0.02em',
         paragraphSpacing: '0.8em',
-        enableIndent: false, // 缩进开关：开 = 2em, 关 = 0em
-        cleanBreaks: true,  // 自动清理多余空行/空段落
+
+        enableIndent: false,
+
+        // 自动清理多余空行 / 空段落
+        cleanBreaks: true,
+
         justifyText: true,
         highContrast: true,
         hideNotes: false
     };
 
-    // 读取或初始化用户设置
+
+    // ============================================================
+    // 3. 设置读取 / 保存
+    // ============================================================
+
     function getSettings() {
-        const saved = localStorage.getItem('ao3_site_wizard_settings');
-        if (!saved) return DEFAULT_SETTINGS;
+        const saved = localStorage.getItem(
+            'ao3_site_wizard_settings'
+        );
+
+        if (!saved) {
+            return DEFAULT_SETTINGS;
+        }
+
         try {
-            return { ...DEFAULT_SETTINGS, ...JSON.parse(saved) };
+            return {
+                ...DEFAULT_SETTINGS,
+                ...JSON.parse(saved)
+            };
         } catch (e) {
             return DEFAULT_SETTINGS;
         }
     }
 
+
     function saveSettings(settings) {
-        localStorage.setItem('ao3_site_wizard_settings', JSON.stringify(settings));
+        localStorage.setItem(
+            'ao3_site_wizard_settings',
+            JSON.stringify(settings)
+        );
     }
 
-    // 清理正文中多余的空行和空段落
+
+    // ============================================================
+    // 4. 空行 / 空段落清理
+    // ============================================================
+
+    /*
+     * 判定文字是否实际上为空。
+     *
+     * 除普通空白外，还清理：
+     *
+     * \u00A0  &nbsp;
+     * \u3000  中文全角空格
+     * \u200B  zero-width space
+     * \u200C  zero-width non-joiner
+     * \u200D  zero-width joiner
+     * \u2060  word joiner
+     * \uFEFF  BOM / zero-width no-break space
+     *
+     * 以及 Unicode 中其它常见不可见空白。
+     */
+    function isBlankText(text) {
+        return String(text || '')
+            .replace(
+                /[\s\u00A0\u1680\u180E\u2000-\u200F\u2028\u2029\u202F\u205F\u2060\u3000\uFEFF]/g,
+                ''
+            )
+            .trim() === '';
+    }
+
+
+    /*
+     * 判断某个 HTML 元素是否为空。
+     *
+     * 如果里面存在图片、iframe、视频等实际内容，
+     * 即使 textContent 为空也不能删除。
+     */
+    function isEmptyElement(el) {
+        if (!el) return true;
+
+        // 有实际媒体 / 嵌入内容时保留
+        if (
+            el.querySelector(
+                'img, iframe, video, audio, canvas, svg, object, embed'
+            )
+        ) {
+            return false;
+        }
+
+        return isBlankText(el.textContent);
+    }
+
+
+    /*
+     * 清理 AO3 正文中的多余空行。
+     *
+     * 特别处理类似：
+     *
+     * <div class="ace-line longKeep gutter-noauthor">
+     *     <p>
+     *         <span class="author-xxx New Roman">&nbsp;</span>
+     *     </p>
+     * </div>
+     *
+     * 这种富文本编辑器生成的伪空行。
+     */
     function cleanExtraBreaks() {
         const settings = getSettings();
-        if (!settings.enabled || !settings.cleanBreaks) return;
 
-        const userstuff = document.querySelector('#workskin .userstuff');
-        if (!userstuff) return;
-
-        // 1. 移除空段落（包含只有空格、&nbsp; 或无实质内容的 p 标签）
-        const paragraphs = userstuff.querySelectorAll('p');
-        paragraphs.forEach(p => {
-            const textContent = p.textContent.replace(/\u00a0/g, ' ').trim();
-            if (textContent === '' && !p.querySelector('img, iframe, video')) {
-                p.remove();
-            }
-        });
-
-        // 2. 清理连续重复的 <br> 换行符
-        const brs = userstuff.querySelectorAll('br');
-        brs.forEach(br => {
-            let next = br.nextSibling;
-            while (next && (next.nodeType === 3 && next.nodeValue.trim() === '')) {
-                next = next.nextSibling;
-            }
-            if (next && next.tagName === 'BR') {
-                br.remove();
-            }
-        });
-    }
-
-    // 2. 生成并注入 AO3 样式表
-    function applyStyles() {
-        const settings = getSettings();
-        if (!settings.enabled) {
-            const oldStyle = document.getElementById('ao3-site-wizard-custom-style');
-            if (oldStyle) oldStyle.textContent = '';
+        if (!settings.enabled || !settings.cleanBreaks) {
             return;
         }
 
-        const styleId = 'ao3-site-wizard-custom-style';
-        let styleEl = document.getElementById(styleId);
-        if (!styleEl) {
-            styleEl = document.createElement('style');
-            styleEl.id = styleId;
-            (document.head || document.documentElement).appendChild(styleEl);
+        // AO3 一个页面可能有多个 .userstuff，
+        // 不再只处理第一个。
+        const userstuffs =
+            document.querySelectorAll('#workskin .userstuff');
+
+        if (!userstuffs.length) {
+            return;
         }
 
-        const cssRules = `
-            /* 1. 全局站点字体设置 */
-            ${settings.siteFont ? `
-            body, body *:not(code):not(pre):not(.icon) {
-                font-family: ${settings.siteFont} !important;
-            }` : ''}
+        userstuffs.forEach(userstuff => {
 
-            /* 2. 正文/作品区（Workskin）基础设置 */
+            // ----------------------------------------------------
+            // A. 优先删除 ACE / 富文本编辑器生成的空行
+            // ----------------------------------------------------
+
+            userstuff
+                .querySelectorAll('div.ace-line')
+                .forEach(div => {
+                    if (isEmptyElement(div)) {
+                        div.remove();
+                    }
+                });
+
+
+            // ----------------------------------------------------
+            // B. 删除只包含空白字符的 inline 元素
+            // ----------------------------------------------------
+
+            userstuff
+                .querySelectorAll(
+                    'span, em, strong, b, i'
+                )
+                .forEach(el => {
+                    if (isEmptyElement(el)) {
+                        el.remove();
+                    }
+                });
+
+
+            // ----------------------------------------------------
+            // C. 清理空链接
+            //
+            // 注意：
+            // 如果链接包含图片等内容，isEmptyElement()
+            // 会自动返回 false，因此不会误删。
+            // ----------------------------------------------------
+
+            userstuff
+                .querySelectorAll('a')
+                .forEach(el => {
+                    if (isEmptyElement(el)) {
+                        el.remove();
+                    }
+                });
+
+
+            // ----------------------------------------------------
+            // D. 删除空段落
+            // ----------------------------------------------------
+
+            userstuff
+                .querySelectorAll('p')
+                .forEach(p => {
+                    if (isEmptyElement(p)) {
+                        p.remove();
+                    }
+                });
+
+
+            // ----------------------------------------------------
+            // E. 再次删除 ACE 空行
+            //
+            // 因为内部 span / p 删除以后，
+            // 原本非空的 div 可能已经变为空。
+            // ----------------------------------------------------
+
+            userstuff
+                .querySelectorAll('div.ace-line')
+                .forEach(div => {
+                    if (isEmptyElement(div)) {
+                        div.remove();
+                    }
+                });
+
+
+            // ----------------------------------------------------
+            // F. 删除一般空 DIV
+            // ----------------------------------------------------
+
+            userstuff
+                .querySelectorAll('div')
+                .forEach(div => {
+                    if (isEmptyElement(div)) {
+                        div.remove();
+                    }
+                });
+
+
+            // ----------------------------------------------------
+            // G. 清理连续 <br>
+            //
+            // 示例：
+            //
+            // <br>
+            // whitespace
+            // <br>
+            //
+            // 最终只保留一个。
+            // ----------------------------------------------------
+
+            const brs =
+                Array.from(
+                    userstuff.querySelectorAll('br')
+                );
+
+            brs.forEach(br => {
+                if (!br.isConnected) {
+                    return;
+                }
+
+                let next = br.nextSibling;
+
+                // 跳过纯空白 text node
+                while (
+                    next &&
+                    next.nodeType === Node.TEXT_NODE &&
+                    isBlankText(next.nodeValue)
+                ) {
+                    next = next.nextSibling;
+                }
+
+                // 连续 BR 时删除前面的 BR
+                if (
+                    next &&
+                    next.nodeType === Node.ELEMENT_NODE &&
+                    next.tagName === 'BR'
+                ) {
+                    br.remove();
+                }
+            });
+
+
+            // ----------------------------------------------------
+            // H. 最后一轮兜底
+            //
+            // 防止前面的删除操作产生新的空 p/div。
+            // ----------------------------------------------------
+
+            userstuff
+                .querySelectorAll(
+                    'p, div.ace-line'
+                )
+                .forEach(el => {
+                    if (isEmptyElement(el)) {
+                        el.remove();
+                    }
+                });
+        });
+    }
+
+
+    // ============================================================
+    // 5. DOM 动态监听
+    // ============================================================
+
+    /*
+     * 某些 AO3 内容 / userscript 可能在 DOMContentLoaded
+     * 之后继续修改正文。
+     *
+     * MutationObserver 可以在正文变化之后重新执行清理。
+     *
+     * 使用 debounce 避免一次 DOM 更新触发几十次清理。
+     */
+
+    let workObserver = null;
+    let cleanTimer = null;
+
+
+    function observeWorkContent() {
+        const workskin =
+            document.querySelector('#workskin');
+
+        if (!workskin) {
+            return;
+        }
+
+        // 避免重复 observer
+        if (workObserver) {
+            workObserver.disconnect();
+        }
+
+        workObserver =
+            new MutationObserver(() => {
+
+                clearTimeout(cleanTimer);
+
+                cleanTimer =
+                    setTimeout(() => {
+                        cleanExtraBreaks();
+                    }, 100);
+            });
+
+
+        workObserver.observe(
+            workskin,
+            {
+                childList: true,
+                subtree: true
+            }
+        );
+    }
+
+
+    // ============================================================
+    // 6. 生成并注入 AO3 样式表
+    // ============================================================
+
+    function applyStyles() {
+        const settings = getSettings();
+
+        if (!settings.enabled) {
+            const oldStyle =
+                document.getElementById(
+                    'ao3-site-wizard-custom-style'
+                );
+
+            if (oldStyle) {
+                oldStyle.textContent = '';
+            }
+
+            return;
+        }
+
+
+        const styleId =
+            'ao3-site-wizard-custom-style';
+
+        let styleEl =
+            document.getElementById(styleId);
+
+
+        if (!styleEl) {
+            styleEl =
+                document.createElement('style');
+
+            styleEl.id = styleId;
+
+            (
+                document.head ||
+                document.documentElement
+            ).appendChild(styleEl);
+        }
+
+
+        const cssRules = `
+
+            /* ====================================================
+               1. 全局站点字体
+               ==================================================== */
+
+            ${settings.siteFont ? `
+            body,
+            body *:not(code):not(pre):not(.icon) {
+                font-family:
+                    ${settings.siteFont}
+                    !important;
+            }
+            ` : ''}
+
+
+            /* ====================================================
+               2. 正文基础设置
+               ==================================================== */
+
             #workskin,
             #workskin .userstuff,
             #workskin .userstuff p,
             #workskin .userstuff blockquote {
-                ${settings.workFont ? `font-family: ${settings.workFont} !important;` : ''}
-                ${settings.fontSize ? `font-size: ${settings.fontSize} !important;` : ''}
-                ${settings.lineHeight ? `line-height: ${settings.lineHeight} !important;` : ''}
+
+                ${settings.workFont ? `
+                font-family:
+                    ${settings.workFont}
+                    !important;
+                ` : ''}
+
+                ${settings.fontSize ? `
+                font-size:
+                    ${settings.fontSize}
+                    !important;
+                ` : ''}
+
+                ${settings.lineHeight ? `
+                line-height:
+                    ${settings.lineHeight}
+                    !important;
+                ` : ''}
             }
 
-            /* 3. 段落细节微调 */
+
+            /* ====================================================
+               3. 段落设置
+               ==================================================== */
+
             #workskin .userstuff p {
-                ${settings.letterSpacing ? `letter-spacing: ${settings.letterSpacing} !important;` : ''}
-                ${settings.paragraphSpacing ? `margin-bottom: ${settings.paragraphSpacing} !important;` : ''}
-                text-indent: ${settings.enableIndent ? '2em' : '0em'} !important;
-                ${settings.justifyText ? `text-align: justify !important;` : ''}
+
+                ${settings.letterSpacing ? `
+                letter-spacing:
+                    ${settings.letterSpacing}
+                    !important;
+                ` : ''}
+
+                ${settings.paragraphSpacing ? `
+                margin-bottom:
+                    ${settings.paragraphSpacing}
+                    !important;
+                ` : ''}
+
+                text-indent:
+                    ${settings.enableIndent ? '2em' : '0em'}
+                    !important;
+
+                ${settings.justifyText ? `
+                text-align:
+                    justify
+                    !important;
+                ` : ''}
             }
 
-            /* 4. 阅读版心宽度限制 */
+
+            /* ====================================================
+               4. 阅读版心
+               ==================================================== */
+
             #workskin .userstuff {
-                ${settings.maxWidth ? `max-width: ${settings.maxWidth} !important;` : ''}
-                margin-left: auto !important;
-                margin-right: auto !important;
+
+                ${settings.maxWidth ? `
+                max-width:
+                    ${settings.maxWidth}
+                    !important;
+                ` : ''}
+
+                margin-left:
+                    auto
+                    !important;
+
+                margin-right:
+                    auto
+                    !important;
             }
 
-            /* 5. 选项 B：纯黑高对比度 + 全局背景纯白 */
-            ${settings.highContrast ? `
-            body, #outer, #inner, #workskin, #workskin .userstuff, #workskin .userstuff * {
-                color: #000000 !important;
-                background-color: #ffffff !important;
-            }` : ''}
 
-            /* 6. 隐藏作者前言/后记 */
+            /* ====================================================
+               5. 黑字 + 白底
+               ==================================================== */
+
+            ${settings.highContrast ? `
+            body,
+            #outer,
+            #inner,
+            #workskin,
+            #workskin .userstuff,
+            #workskin .userstuff * {
+
+                color:
+                    #000000
+                    !important;
+
+                background-color:
+                    #ffffff
+                    !important;
+            }
+            ` : ''}
+
+
+            /* ====================================================
+               6. 隐藏 Notes
+               ==================================================== */
+
             ${settings.hideNotes ? `
-            #workskin .notes, #workskin .end.notes {
-                display: none !important;
-            }` : ''}
+            #workskin .notes,
+            #workskin .end.notes {
+                display:
+                    none
+                    !important;
+            }
+            ` : ''}
         `;
 
+
         styleEl.textContent = cssRules;
+
+        // 每次重新应用设置时也清理正文
         cleanExtraBreaks();
     }
 
-    // 3. 构建控制面板 UI 及精准兼容 #scriptconfig 的 Userscripts 菜单挂载逻辑
+
+    // ============================================================
+    // 7. 控制面板
+    // ============================================================
+
     function createUI() {
-        if (document.getElementById('ao3-wizard-ui')) return;
+
+        if (
+            document.getElementById(
+                'ao3-wizard-ui'
+            )
+        ) {
+            return;
+        }
+
 
         const settings = getSettings();
 
-        // 挂载到主导航栏的 #scriptconfig 菜单
-        const primaryNav = document.querySelector('#header ul.primary');
-        if (primaryNav) {
-            // 1. 精准寻找 id="scriptconfig" 的节点
-            let userscriptMenu = primaryNav.querySelector('li#scriptconfig');
 
-            // 2. 没找到 id 时，退回模糊查找文本包含 Userscripts 的下拉菜单
+        // --------------------------------------------------------
+        // Userscripts 导航菜单
+        // --------------------------------------------------------
+
+        const primaryNav =
+            document.querySelector(
+                '#header ul.primary'
+            );
+
+
+        if (primaryNav) {
+
+            let userscriptMenu =
+                primaryNav.querySelector(
+                    'li#scriptconfig'
+                );
+
+
+            // 如果没有 #scriptconfig，
+            // 尝试通过 Userscripts 文本寻找
             if (!userscriptMenu) {
-                const lis = primaryNav.querySelectorAll('li.dropdown');
+
+                const lis =
+                    primaryNav.querySelectorAll(
+                        'li.dropdown'
+                    );
+
                 for (let li of lis) {
-                    const a = li.querySelector('a');
-                    if (a && a.textContent.trim().toLowerCase() === 'userscripts') {
+
+                    const a =
+                        li.querySelector('a');
+
+                    if (
+                        a &&
+                        a.textContent
+                            .trim()
+                            .toLowerCase() ===
+                        'userscripts'
+                    ) {
                         userscriptMenu = li;
                         break;
                     }
                 }
             }
 
+
             let menuList = null;
 
+
             if (userscriptMenu) {
-                menuList = userscriptMenu.querySelector('ul.menu');
+
+                menuList =
+                    userscriptMenu.querySelector(
+                        'ul.menu'
+                    );
+
             } else {
-                // 3. 如果完全没有，建立标准 #scriptconfig 结构
-                userscriptMenu = document.createElement('li');
-                userscriptMenu.className = 'dropdown';
-                userscriptMenu.id = 'scriptconfig';
+
+                // 没有 Userscripts 菜单就自行创建
+                userscriptMenu =
+                    document.createElement('li');
+
+                userscriptMenu.className =
+                    'dropdown';
+
+                userscriptMenu.id =
+                    'scriptconfig';
+
+
                 userscriptMenu.innerHTML = `
-                    <a class="dropdown-toggle" href="/" data-toggle="dropdown" data-target="#">Userscripts</a>
-                    <ul class="menu dropdown-menu" role="menu"></ul>
+                    <a
+                        class="dropdown-toggle"
+                        href="/"
+                        data-toggle="dropdown"
+                        data-target="#"
+                    >
+                        Userscripts
+                    </a>
+
+                    <ul
+                        class="menu dropdown-menu"
+                        role="menu"
+                    ></ul>
                 `;
-                primaryNav.appendChild(userscriptMenu);
-                menuList = userscriptMenu.querySelector('ul.menu');
+
+
+                // 插到 Search 左边
+                const searchItem =
+                    primaryNav.querySelector(
+                        'li.search'
+                    );
+
+
+                if (searchItem) {
+
+                    primaryNav.insertBefore(
+                        userscriptMenu,
+                        searchItem
+                    );
+
+                } else {
+
+                    primaryNav.appendChild(
+                        userscriptMenu
+                    );
+                }
+
+
+                menuList =
+                    userscriptMenu.querySelector(
+                        'ul.menu'
+                    );
             }
 
-            // 4. 追加本项目菜单项（避免重复追加）
-            if (menuList && !document.getElementById('opencfg_site_wizard')) {
-                const menuItem = document.createElement('li');
-                menuItem.innerHTML = `<a href="javascript:void(0);" id="opencfg_site_wizard">Site Wizard</a>`;
-                menuList.appendChild(menuItem);
+
+            // ----------------------------------------------------
+            // 添加 Site Wizard 菜单项
+            // ----------------------------------------------------
+
+            if (
+                menuList &&
+                !document.getElementById(
+                    'opencfg_site_wizard'
+                )
+            ) {
+
+                const menuItem =
+                    document.createElement('li');
+
+
+                menuItem.innerHTML = `
+                    <a
+                        href="javascript:void(0);"
+                        id="opencfg_site_wizard"
+                    >
+                        Site Wizard
+                    </a>
+                `;
+
+
+                menuList.appendChild(
+                    menuItem
+                );
             }
         }
 
-        // 创建控制面板外壳
-        const container = document.createElement('div');
-        container.id = 'ao3-wizard-ui';
+
+        // --------------------------------------------------------
+        // 控制面板本体
+        // --------------------------------------------------------
+
+        const container =
+            document.createElement('div');
+
+
+        container.id =
+            'ao3-wizard-ui';
+
+
         container.style.cssText = `
             position: fixed;
             top: 15%;
             right: 20px;
             z-index: 999999;
+
             background: #fff;
-            border: 2px solid #900;
-            padding: 14px 16px;
-            border-radius: 8px;
-            box-shadow: 0 4px 16px rgba(0,0,0,0.25);
-            font-size: 13px;
-            color: #333;
-            width: 290px;
-            max-height: 80vh;
-            overflow-y: auto;
-            display: none;
-            box-sizing: border-box;
+
+            border:
+                2px solid #900;
+
+            padding:
+                14px 16px;
+
+            border-radius:
+                8px;
+
+            box-shadow:
+                0 4px 16px
+                rgba(0,0,0,0.25);
+
+            font-size:
+                13px;
+
+            color:
+                #333;
+
+            width:
+                290px;
+
+            max-height:
+                80vh;
+
+            overflow-y:
+                auto;
+
+            display:
+                none;
+
+            box-sizing:
+                border-box;
         `;
+
 
         container.innerHTML = `
-            <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid #ddd; padding-bottom:6px; margin-bottom:10px;">
-                <h3 style="margin:0; font-size:15px; color:#900;">AO3 Site Wizard</h3>
-                <span id="wiz-close" style="cursor:pointer; font-weight:bold; color:#888; font-size:16px;">✕</span>
+
+            <div
+                style="
+                    display:flex;
+                    justify-content:space-between;
+                    align-items:center;
+                    border-bottom:1px solid #ddd;
+                    padding-bottom:6px;
+                    margin-bottom:10px;
+                "
+            >
+
+                <h3
+                    style="
+                        margin:0;
+                        font-size:15px;
+                        color:#900;
+                    "
+                >
+                    AO3 Site Wizard
+                </h3>
+
+                <span
+                    id="wiz-close"
+                    style="
+                        cursor:pointer;
+                        font-weight:bold;
+                        color:#888;
+                        font-size:16px;
+                    "
+                >
+                    ✕
+                </span>
+
             </div>
 
-            <label style="display:block; margin-bottom:8px; font-weight:bold;">
-                <input type="checkbox" id="wiz-enable" ${settings.enabled ? 'checked' : ''}> 启用自定义样式
+
+            <label
+                style="
+                    display:block;
+                    margin-bottom:8px;
+                    font-weight:bold;
+                "
+            >
+
+                <input
+                    type="checkbox"
+                    id="wiz-enable"
+                    ${settings.enabled ? 'checked' : ''}
+                >
+
+                启用自定义样式
+
             </label>
 
-            <hr style="border:none; border-top:1px dashed #ccc; margin:8px 0;">
 
-            <label style="display:block; margin-bottom:6px;">
+            <hr
+                style="
+                    border:none;
+                    border-top:1px dashed #ccc;
+                    margin:8px 0;
+                "
+            >
+
+
+            <label
+                style="
+                    display:block;
+                    margin-bottom:6px;
+                "
+            >
+
                 正文字体 (Work Font):
-                <input type="text" id="wiz-work-font" value='${settings.workFont}' style="width:100%; box-sizing:border-box; margin-top:2px;">
+
+                <input
+                    type="text"
+                    id="wiz-work-font"
+                    value='${settings.workFont}'
+                    style="
+                        width:100%;
+                        box-sizing:border-box;
+                        margin-top:2px;
+                    "
+                >
+
             </label>
 
-            <div style="display:flex; gap:8px; margin-bottom:6px;">
+
+            <div
+                style="
+                    display:flex;
+                    gap:8px;
+                    margin-bottom:6px;
+                "
+            >
+
                 <label style="flex:1;">
+
                     字号:
-                    <input type="text" id="wiz-font-size" value='${settings.fontSize}' style="width:100%; box-sizing:border-box; margin-top:2px;">
+
+                    <input
+                        type="text"
+                        id="wiz-font-size"
+                        value='${settings.fontSize}'
+                        style="
+                            width:100%;
+                            box-sizing:border-box;
+                            margin-top:2px;
+                        "
+                    >
+
                 </label>
+
+
                 <label style="flex:1;">
+
                     行高:
-                    <input type="text" id="wiz-line-height" value='${settings.lineHeight}' style="width:100%; box-sizing:border-box; margin-top:2px;">
+
+                    <input
+                        type="text"
+                        id="wiz-line-height"
+                        value='${settings.lineHeight}'
+                        style="
+                            width:100%;
+                            box-sizing:border-box;
+                            margin-top:2px;
+                        "
+                    >
+
                 </label>
+
             </div>
 
-            <div style="display:flex; gap:8px; margin-bottom:6px;">
+
+            <div
+                style="
+                    display:flex;
+                    gap:8px;
+                    margin-bottom:6px;
+                "
+            >
+
                 <label style="flex:1;">
+
                     字间距:
-                    <input type="text" id="wiz-letter-spacing" value='${settings.letterSpacing}' style="width:100%; box-sizing:border-box; margin-top:2px;">
+
+                    <input
+                        type="text"
+                        id="wiz-letter-spacing"
+                        value='${settings.letterSpacing}'
+                        style="
+                            width:100%;
+                            box-sizing:border-box;
+                            margin-top:2px;
+                        "
+                    >
+
                 </label>
+
+
                 <label style="flex:1;">
+
                     段间距:
-                    <input type="text" id="wiz-para-spacing" value='${settings.paragraphSpacing}' style="width:100%; box-sizing:border-box; margin-top:2px;">
+
+                    <input
+                        type="text"
+                        id="wiz-para-spacing"
+                        value='${settings.paragraphSpacing}'
+                        style="
+                            width:100%;
+                            box-sizing:border-box;
+                            margin-top:2px;
+                        "
+                    >
+
                 </label>
+
             </div>
 
-            <div style="margin-bottom:8px;">
-                <label style="display:block;">
+
+            <div
+                style="
+                    margin-bottom:8px;
+                "
+            >
+
+                <label
+                    style="
+                        display:block;
+                    "
+                >
+
                     最大版宽:
-                    <input type="text" id="wiz-max-width" value='${settings.maxWidth}' style="width:100%; box-sizing:border-box; margin-top:2px;">
+
+                    <input
+                        type="text"
+                        id="wiz-max-width"
+                        value='${settings.maxWidth}'
+                        style="
+                            width:100%;
+                            box-sizing:border-box;
+                            margin-top:2px;
+                        "
+                    >
+
                 </label>
+
             </div>
 
-            <hr style="border:none; border-top:1px dashed #ccc; margin:8px 0;">
 
-            <label style="display:block; margin-bottom:4px;">
-                <input type="checkbox" id="wiz-clean-breaks" ${settings.cleanBreaks ? 'checked' : ''}> 移除多余空行 / 空段落
+            <hr
+                style="
+                    border:none;
+                    border-top:1px dashed #ccc;
+                    margin:8px 0;
+                "
+            >
+
+
+            <label
+                style="
+                    display:block;
+                    margin-bottom:4px;
+                "
+            >
+
+                <input
+                    type="checkbox"
+                    id="wiz-clean-breaks"
+                    ${settings.cleanBreaks ? 'checked' : ''}
+                >
+
+                移除多余空行 / 空段落
+
             </label>
-            <label style="display:block; margin-bottom:4px;">
-                <input type="checkbox" id="wiz-indent" ${settings.enableIndent ? 'checked' : ''}> 首行缩进 2 个中文字符
+
+
+            <label
+                style="
+                    display:block;
+                    margin-bottom:4px;
+                "
+            >
+
+                <input
+                    type="checkbox"
+                    id="wiz-indent"
+                    ${settings.enableIndent ? 'checked' : ''}
+                >
+
+                首行缩进 2 个中文字符
+
             </label>
-            <label style="display:block; margin-bottom:4px;">
-                <input type="checkbox" id="wiz-justify" ${settings.justifyText ? 'checked' : ''}> 正文两端对齐
+
+
+            <label
+                style="
+                    display:block;
+                    margin-bottom:4px;
+                "
+            >
+
+                <input
+                    type="checkbox"
+                    id="wiz-justify"
+                    ${settings.justifyText ? 'checked' : ''}
+                >
+
+                正文两端对齐
+
             </label>
-            <label style="display:block; margin-bottom:4px;">
-                <input type="checkbox" id="wiz-contrast" ${settings.highContrast ? 'checked' : ''}> 强制纯黑文字 + 纯白背景
+
+
+            <label
+                style="
+                    display:block;
+                    margin-bottom:4px;
+                "
+            >
+
+                <input
+                    type="checkbox"
+                    id="wiz-contrast"
+                    ${settings.highContrast ? 'checked' : ''}
+                >
+
+                强制纯黑文字 + 纯白背景
+
             </label>
-            <label style="display:block; margin-bottom:12px;">
-                <input type="checkbox" id="wiz-hide-notes" ${settings.hideNotes ? 'checked' : ''}> 隐藏作者前言/后记 (Notes)
+
+
+            <label
+                style="
+                    display:block;
+                    margin-bottom:12px;
+                "
+            >
+
+                <input
+                    type="checkbox"
+                    id="wiz-hide-notes"
+                    ${settings.hideNotes ? 'checked' : ''}
+                >
+
+                隐藏作者前言/后记 (Notes)
+
             </label>
+
 
             <div style="text-align:right;">
-                <button id="wiz-save" style="background:#900; color:#fff; border:none; padding:6px 14px; border-radius:4px; cursor:pointer; font-weight:bold;">保存并生效</button>
+
+                <button
+                    id="wiz-save"
+                    style="
+                        background:#900;
+                        color:#fff;
+                        border:none;
+                        padding:6px 14px;
+                        border-radius:4px;
+                        cursor:pointer;
+                        font-weight:bold;
+                    "
+                >
+                    保存并生效
+                </button>
+
             </div>
         `;
 
-        document.body.appendChild(container);
 
-        // 显示/隐藏面板逻辑
+        document.body.appendChild(
+            container
+        );
+
+
+        // --------------------------------------------------------
+        // 面板开关
+        // --------------------------------------------------------
+
         const toggleUI = (e) => {
-            if (e) e.preventDefault();
-            container.style.display = container.style.display === 'none' ? 'block' : 'none';
+
+            if (e) {
+                e.preventDefault();
+            }
+
+            container.style.display =
+                container.style.display === 'none'
+                    ? 'block'
+                    : 'none';
         };
 
-        // 事件绑定：绑定给全新的链接 ID #opencfg_site_wizard
-        const navLink = document.getElementById('opencfg_site_wizard');
-        if (navLink) navLink.addEventListener('click', toggleUI);
 
-        document.getElementById('wiz-close').addEventListener('click', toggleUI);
+        const navLink =
+            document.getElementById(
+                'opencfg_site_wizard'
+            );
 
-        // 快捷键保留: Shift + Alt + W
-        document.addEventListener('keydown', (e) => {
-            if (e.shiftKey && e.altKey && e.code === 'KeyW') {
-                toggleUI();
+
+        if (navLink) {
+            navLink.addEventListener(
+                'click',
+                toggleUI
+            );
+        }
+
+
+        document
+            .getElementById('wiz-close')
+            .addEventListener(
+                'click',
+                toggleUI
+            );
+
+
+        // --------------------------------------------------------
+        // 快捷键 Shift + Alt + W
+        // --------------------------------------------------------
+
+        document.addEventListener(
+            'keydown',
+            (e) => {
+
+                if (
+                    e.shiftKey &&
+                    e.altKey &&
+                    e.code === 'KeyW'
+                ) {
+                    toggleUI();
+                }
             }
-        });
+        );
 
-        // 保存逻辑
-        document.getElementById('wiz-save').addEventListener('click', () => {
-            const newSettings = {
-                enabled: document.getElementById('wiz-enable').checked,
-                siteFont: settings.siteFont,
-                workFont: document.getElementById('wiz-work-font').value,
-                fontSize: document.getElementById('wiz-font-size').value,
-                lineHeight: document.getElementById('wiz-line-height').value,
-                letterSpacing: document.getElementById('wiz-letter-spacing').value,
-                paragraphSpacing: document.getElementById('wiz-para-spacing').value,
-                maxWidth: document.getElementById('wiz-max-width').value,
-                cleanBreaks: document.getElementById('wiz-clean-breaks').checked,
-                enableIndent: document.getElementById('wiz-indent').checked,
-                justifyText: document.getElementById('wiz-justify').checked,
-                highContrast: document.getElementById('wiz-contrast').checked,
-                hideNotes: document.getElementById('wiz-hide-notes').checked
-            };
-            saveSettings(newSettings);
-            applyStyles();
-            container.style.display = 'none';
-        });
+
+        // --------------------------------------------------------
+        // 保存设置
+        // --------------------------------------------------------
+
+        document
+            .getElementById('wiz-save')
+            .addEventListener(
+                'click',
+                () => {
+
+                    const newSettings = {
+
+                        enabled:
+                            document
+                                .getElementById(
+                                    'wiz-enable'
+                                )
+                                .checked,
+
+                        siteFont:
+                            settings.siteFont,
+
+                        workFont:
+                            document
+                                .getElementById(
+                                    'wiz-work-font'
+                                )
+                                .value,
+
+                        fontSize:
+                            document
+                                .getElementById(
+                                    'wiz-font-size'
+                                )
+                                .value,
+
+                        lineHeight:
+                            document
+                                .getElementById(
+                                    'wiz-line-height'
+                                )
+                                .value,
+
+                        letterSpacing:
+                            document
+                                .getElementById(
+                                    'wiz-letter-spacing'
+                                )
+                                .value,
+
+                        paragraphSpacing:
+                            document
+                                .getElementById(
+                                    'wiz-para-spacing'
+                                )
+                                .value,
+
+                        maxWidth:
+                            document
+                                .getElementById(
+                                    'wiz-max-width'
+                                )
+                                .value,
+
+                        cleanBreaks:
+                            document
+                                .getElementById(
+                                    'wiz-clean-breaks'
+                                )
+                                .checked,
+
+                        enableIndent:
+                            document
+                                .getElementById(
+                                    'wiz-indent'
+                                )
+                                .checked,
+
+                        justifyText:
+                            document
+                                .getElementById(
+                                    'wiz-justify'
+                                )
+                                .checked,
+
+                        highContrast:
+                            document
+                                .getElementById(
+                                    'wiz-contrast'
+                                )
+                                .checked,
+
+                        hideNotes:
+                            document
+                                .getElementById(
+                                    'wiz-hide-notes'
+                                )
+                                .checked
+                    };
+
+
+                    saveSettings(
+                        newSettings
+                    );
+
+
+                    applyStyles();
+
+
+                    // 设置修改后重新建立观察器
+                    observeWorkContent();
+
+
+                    // container.style.display =
+                    //     'none';
+                }
+            );
     }
 
-    // 初始化运行
+
+    // ============================================================
+    // 8. 初始化
+    // ============================================================
+
+    // document-start 阶段先尝试应用样式。
+    // 此时正文可能还不存在，这是正常的。
     applyStyles();
-    if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', () => {
-            createUI();
-            cleanExtraBreaks();
-        });
-    } else {
+
+
+    function initialize() {
+
         createUI();
+
+        // 首次完整清理
         cleanExtraBreaks();
+
+        // 开始监听后续正文变化
+        observeWorkContent();
+
+        // AO3 / 其它 userscript 偶尔会稍晚插入正文，
+        // 再做一次保险清理。
+        setTimeout(
+            cleanExtraBreaks,
+            250
+        );
+
+        setTimeout(
+            cleanExtraBreaks,
+            1000
+        );
     }
+
+
+    if (
+        document.readyState === 'loading'
+    ) {
+
+        document.addEventListener(
+            'DOMContentLoaded',
+            initialize,
+            {
+                once: true
+            }
+        );
+
+    } else {
+
+        initialize();
+    }
+
 })();
