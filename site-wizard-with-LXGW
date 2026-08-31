@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name         AO3: Site Wizard (with LXGW WenKai Screen CDN) - Personal Edition
+// @name         AO3: Site Wizard (with LXGW WenKai Screen CDN & e-ink optimization)
 // @namespace    http://tampermonkey.net/
-// @version      1.7.0
+// @version      1.7.1
 // @description  Customize AO3 work and site styles with LXGW WenKai Screen online font, cleanup extra line breaks/empty paragraphs, and share Userscripts navbar menu.
 // @author       BlackBatCat (Modified)
 // @match        *://archiveofourown.org/*
@@ -130,8 +130,9 @@
 
             /* 5. 纯黑高对比度（适合墨水屏） */
             ${settings.highContrast ? `
-            #workskin, #workskin .userstuff, #workskin .userstuff p, #workskin .userstuff * {
+            body, #outer, #inner, #workskin, #workskin .userstuff, #workskin .userstuff * {
                 color: #000000 !important;
+                background-color: #ffffff !important; /* 新增：全局背景强制纯白 */
             }` : ''}
 
             /* 6. 隐藏作者前言/后记 */
