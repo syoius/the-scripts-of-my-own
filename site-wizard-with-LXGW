@@ -1,12 +1,14 @@
 // ==UserScript==
-// @name         AO3: Site Wizard (with LXGW WenKai Screen CDN & e-ink optimization)
+// @name         AO3: Site Wizard (with LXGW WenKai Screen CDN) - Personal Edition
 // @namespace    http://tampermonkey.net/
-// @version      1.8.4
-// @description  Customize AO3 work and site styles with LXGW WenKai Screen online font, cleanup extra line breaks/empty paragraphs, share scriptconfig navbar menu, and force high contrast white background.
-// @author       BlackBatCat (Modified by syoius)
+// @version      1.8.5
+// @description  Customize AO3 reading styles, typography, cleanup extra line breaks/empty paragraphs, and provide a touch-friendly settings panel.
+// @author       BlackBatCat (Modified)
 // @match        *://archiveofourown.org/*
 // @match        *://*.archiveofourown.org/*
 // @grant        GM_addStyle
+// @grant        GM_getValue
+// @grant        GM_setValue
 // @run-at       document-start
 // ==/UserScript==
 
@@ -14,7 +16,7 @@
     'use strict';
 
     // ============================================================
-    // 1. 注入 JSDelivr 提供的霞鹜文楷屏幕版 CSS CDN
+    // 1. 外部字体
     // ============================================================
 
     const cdnFontCss = `
@@ -27,6 +29,8 @@
     // ============================================================
     // 2. 默认配置
     // ============================================================
+
+    const SETTINGS_KEY = 'ao3_site_wizard_settings';
 
     const DEFAULT_SETTINGS = {
         enabled: true,
@@ -44,10 +48,7 @@
         paragraphSpacing: '0.8em',
 
         enableIndent: false,
-
-        // 自动清理多余空行 / 空段落
         cleanBreaks: true,
-
         justifyText: true,
         highContrast: true,
         hideNotes: false
@@ -55,56 +56,123 @@
 
 
     // ============================================================
-    // 3. 设置读取 / 保存
+    // 3. GM Storage
     // ============================================================
 
+    /*
+     * 设置优先保存在 userscript manager 的 GM Storage 中。
+     *
+     * 第一次升级到 v1.8.5 时：
+     *
+     * localStorage
+     *      ↓
+     * GM Storage
+     *
+     * 自动迁移旧版本配置。
+     */
+
     function getSettings() {
-        const saved = localStorage.getItem(
-            'ao3_site_wizard_settings'
+        let saved = GM_getValue(
+            SETTINGS_KEY,
+            null
         );
 
-        if (!saved) {
-            return DEFAULT_SETTINGS;
-        }
+        // --------------------------------------------------------
+        // 已经存在 GM Storage 配置
+        // --------------------------------------------------------
 
-        try {
+        if (
+            saved &&
+            typeof saved === 'object' &&
+            !Array.isArray(saved)
+        ) {
             return {
                 ...DEFAULT_SETTINGS,
-                ...JSON.parse(saved)
+                ...saved
             };
-        } catch (e) {
-            return DEFAULT_SETTINGS;
         }
+
+
+        // --------------------------------------------------------
+        // 尝试迁移旧 localStorage 配置
+        // --------------------------------------------------------
+
+        try {
+            const legacy =
+                localStorage.getItem(
+                    SETTINGS_KEY
+                );
+
+            if (legacy) {
+                const parsed =
+                    JSON.parse(legacy);
+
+                if (
+                    parsed &&
+                    typeof parsed === 'object' &&
+                    !Array.isArray(parsed)
+                ) {
+                    GM_setValue(
+                        SETTINGS_KEY,
+                        parsed
+                    );
+
+                    localStorage.removeItem(
+                        SETTINGS_KEY
+                    );
+
+                    console.info(
+                        '[AO3 Site Wizard] Settings migrated from localStorage to GM Storage.'
+                    );
+
+                    return {
+                        ...DEFAULT_SETTINGS,
+                        ...parsed
+                    };
+                }
+            }
+        } catch (error) {
+            console.warn(
+                '[AO3 Site Wizard] Failed to migrate legacy settings:',
+                error
+            );
+        }
+
+
+        // --------------------------------------------------------
+        // 没有任何已有配置
+        // --------------------------------------------------------
+
+        return {
+            ...DEFAULT_SETTINGS
+        };
     }
 
 
     function saveSettings(settings) {
-        localStorage.setItem(
-            'ao3_site_wizard_settings',
-            JSON.stringify(settings)
+        GM_setValue(
+            SETTINGS_KEY,
+            settings
         );
     }
 
 
     // ============================================================
-    // 4. 空行 / 空段落清理
+    // 4. 空白判断
     // ============================================================
 
     /*
-     * 判定文字是否实际上为空。
+     * 清理：
      *
-     * 除普通空白外，还清理：
-     *
-     * \u00A0  &nbsp;
-     * \u3000  中文全角空格
-     * \u200B  zero-width space
-     * \u200C  zero-width non-joiner
-     * \u200D  zero-width joiner
-     * \u2060  word joiner
-     * \uFEFF  BOM / zero-width no-break space
-     *
-     * 以及 Unicode 中其它常见不可见空白。
+     * 普通 whitespace
+     * &nbsp;                  \u00A0
+     * 全角空格                \u3000
+     * zero-width characters
+     * word joiner
+     * BOM
+     * Unicode 特殊空白
      */
+
     function isBlankText(text) {
         return String(text || '')
             .replace(
@@ -115,16 +183,25 @@
     }
 
 
-    /*
-     * 判断某个 HTML 元素是否为空。
-     *
-     * 如果里面存在图片、iframe、视频等实际内容，
-     * 即使 textContent 为空也不能删除。
-     */
-    function isEmptyElement(el) {
-        if (!el) return true;
+    // ============================================================
+    // 5. 判断 HTML 元素是否为空
+    // ============================================================
 
-        // 有实际媒体 / 嵌入内容时保留
+    function isEmptyElement(el) {
+        if (!el) {
+            return true;
+        }
+
+        /*
+         * 有实际视觉 / 嵌入内容时保留。
+         *
+         * 防止例如：
+         *
+         * <p><img ...></p>
+         *
+         * 因 textContent 为空而被误删。
+         */
+
         if (
             el.querySelector(
                 'img, iframe, video, audio, canvas, svg, object, embed'
@@ -133,203 +210,252 @@
             return false;
         }
 
-        return isBlankText(el.textContent);
+        return isBlankText(
+            el.textContent
+        );
     }
 
 
-    /*
-     * 清理 AO3 正文中的多余空行。
-     *
-     * 特别处理类似：
-     *
-     * <div class="ace-line longKeep gutter-noauthor">
-     *     <p>
-     *         <span class="author-xxx New Roman">&nbsp;</span>
-     *     </p>
-     * </div>
-     *
-     * 这种富文本编辑器生成的伪空行。
-     */
-    function cleanExtraBreaks() {
-        const settings = getSettings();
+    // ============================================================
+    // 6. 正文空行清理
+    // ============================================================
 
-        if (!settings.enabled || !settings.cleanBreaks) {
+    function cleanExtraBreaks() {
+        const settings =
+            getSettings();
+
+        if (
+            !settings.enabled ||
+            !settings.cleanBreaks
+        ) {
             return;
         }
 
-        // AO3 一个页面可能有多个 .userstuff，
-        // 不再只处理第一个。
+
+        /*
+         * 一个 AO3 页面可能有多个 .userstuff，
+         * 所以不能只 querySelector 第一个。
+         */
+
         const userstuffs =
-            document.querySelectorAll('#workskin .userstuff');
+            document.querySelectorAll(
+                '#workskin .userstuff'
+            );
 
         if (!userstuffs.length) {
             return;
         }
 
-        userstuffs.forEach(userstuff => {
 
-            // ----------------------------------------------------
-            // A. 优先删除 ACE / 富文本编辑器生成的空行
-            // ----------------------------------------------------
+        userstuffs.forEach(
+            userstuff => {
 
-            userstuff
-                .querySelectorAll('div.ace-line')
-                .forEach(div => {
-                    if (isEmptyElement(div)) {
-                        div.remove();
+                // =================================================
+                // A. 优先清理 ace-line 伪空行
+                // =================================================
+
+                /*
+                 * 例如：
+                 *
+                 * <div class="ace-line longKeep gutter-noauthor">
+                 *     <p>
+                 *         <span>&nbsp;</span>
+                 *     </p>
+                 * </div>
+                 */
+
+                userstuff
+                    .querySelectorAll(
+                        'div.ace-line'
+                    )
+                    .forEach(
+                        div => {
+                            if (
+                                isEmptyElement(div)
+                            ) {
+                                div.remove();
+                            }
+                        }
+                    );
+
+
+                // =================================================
+                // B. 清理空 inline 元素
+                // =================================================
+
+                userstuff
+                    .querySelectorAll(
+                        'span, em, strong, b, i'
+                    )
+                    .forEach(
+                        el => {
+                            if (
+                                isEmptyElement(el)
+                            ) {
+                                el.remove();
+                            }
+                        }
+                    );
+
+
+                // =================================================
+                // C. 清理空链接
+                // =================================================
+
+                userstuff
+                    .querySelectorAll('a')
+                    .forEach(
+                        el => {
+                            if (
+                                isEmptyElement(el)
+                            ) {
+                                el.remove();
+                            }
+                        }
+                    );
+
+
+                // =================================================
+                // D. 清理空段落
+                // =================================================
+
+                userstuff
+                    .querySelectorAll('p')
+                    .forEach(
+                        p => {
+                            if (
+                                isEmptyElement(p)
+                            ) {
+                                p.remove();
+                            }
+                        }
+                    );
+
+
+                // =================================================
+                // E. 再次清理 ace-line
+                // =================================================
+
+                /*
+                 * 因为上面删除 span / p 后，
+                 * 外层 div 可能刚刚才变为空。
+                 */
+
+                userstuff
+                    .querySelectorAll(
+                        'div.ace-line'
+                    )
+                    .forEach(
+                        div => {
+                            if (
+                                isEmptyElement(div)
+                            ) {
+                                div.remove();
+                            }
+                        }
+                    );
+
+
+                // =================================================
+                // F. 清理普通空 div
+                // =================================================
+
+                userstuff
+                    .querySelectorAll('div')
+                    .forEach(
+                        div => {
+                            if (
+                                isEmptyElement(div)
+                            ) {
+                                div.remove();
+                            }
+                        }
+                    );
+
+
+                // =================================================
+                // G. 清理连续 BR
+                // =================================================
+
+                const brs =
+                    Array.from(
+                        userstuff.querySelectorAll(
+                            'br'
+                        )
+                    );
+
+
+                brs.forEach(
+                    br => {
+
+                        if (
+                            !br.isConnected
+                        ) {
+                            return;
+                        }
+
+                        let next =
+                            br.nextSibling;
+
+
+                        /*
+                         * 跳过 BR 中间的纯空白文本节点。
+                         */
+
+                        while (
+                            next &&
+                            next.nodeType === Node.TEXT_NODE &&
+                            isBlankText(
+                                next.nodeValue
+                            )
+                        ) {
+                            next =
+                                next.nextSibling;
+                        }
+
+
+                        /*
+                         * <br> whitespace <br>
+                         *
+                         * 删除前面的 BR。
+                         */
+
+                        if (
+                            next &&
+                            next.nodeType === Node.ELEMENT_NODE &&
+                            next.tagName === 'BR'
+                        ) {
+                            br.remove();
+                        }
                     }
-                });
-
-
-            // ----------------------------------------------------
-            // B. 删除只包含空白字符的 inline 元素
-            // ----------------------------------------------------
-
-            userstuff
-                .querySelectorAll(
-                    'span, em, strong, b, i'
-                )
-                .forEach(el => {
-                    if (isEmptyElement(el)) {
-                        el.remove();
-                    }
-                });
-
-
-            // ----------------------------------------------------
-            // C. 清理空链接
-            //
-            // 注意：
-            // 如果链接包含图片等内容，isEmptyElement()
-            // 会自动返回 false，因此不会误删。
-            // ----------------------------------------------------
-
-            userstuff
-                .querySelectorAll('a')
-                .forEach(el => {
-                    if (isEmptyElement(el)) {
-                        el.remove();
-                    }
-                });
-
-
-            // ----------------------------------------------------
-            // D. 删除空段落
-            // ----------------------------------------------------
-
-            userstuff
-                .querySelectorAll('p')
-                .forEach(p => {
-                    if (isEmptyElement(p)) {
-                        p.remove();
-                    }
-                });
-
-
-            // ----------------------------------------------------
-            // E. 再次删除 ACE 空行
-            //
-            // 因为内部 span / p 删除以后，
-            // 原本非空的 div 可能已经变为空。
-            // ----------------------------------------------------
-
-            userstuff
-                .querySelectorAll('div.ace-line')
-                .forEach(div => {
-                    if (isEmptyElement(div)) {
-                        div.remove();
-                    }
-                });
-
-
-            // ----------------------------------------------------
-            // F. 删除一般空 DIV
-            // ----------------------------------------------------
-
-            userstuff
-                .querySelectorAll('div')
-                .forEach(div => {
-                    if (isEmptyElement(div)) {
-                        div.remove();
-                    }
-                });
-
-
-            // ----------------------------------------------------
-            // G. 清理连续 <br>
-            //
-            // 示例：
-            //
-            // <br>
-            // whitespace
-            // <br>
-            //
-            // 最终只保留一个。
-            // ----------------------------------------------------
-
-            const brs =
-                Array.from(
-                    userstuff.querySelectorAll('br')
                 );
 
-            brs.forEach(br => {
-                if (!br.isConnected) {
-                    return;
-                }
 
-                let next = br.nextSibling;
+                // =================================================
+                // H. 最后一轮兜底
+                // =================================================
 
-                // 跳过纯空白 text node
-                while (
-                    next &&
-                    next.nodeType === Node.TEXT_NODE &&
-                    isBlankText(next.nodeValue)
-                ) {
-                    next = next.nextSibling;
-                }
-
-                // 连续 BR 时删除前面的 BR
-                if (
-                    next &&
-                    next.nodeType === Node.ELEMENT_NODE &&
-                    next.tagName === 'BR'
-                ) {
-                    br.remove();
-                }
-            });
-
-
-            // ----------------------------------------------------
-            // H. 最后一轮兜底
-            //
-            // 防止前面的删除操作产生新的空 p/div。
-            // ----------------------------------------------------
-
-            userstuff
-                .querySelectorAll(
-                    'p, div.ace-line'
-                )
-                .forEach(el => {
-                    if (isEmptyElement(el)) {
-                        el.remove();
-                    }
-                });
-        });
+                userstuff
+                    .querySelectorAll(
+                        'p, div.ace-line'
+                    )
+                    .forEach(
+                        el => {
+                            if (
+                                isEmptyElement(el)
+                            ) {
+                                el.remove();
+                            }
+                        }
+                    );
+            }
+        );
     }
 
 
     // ============================================================
-    // 5. DOM 动态监听
+    // 7. MutationObserver
     // ============================================================
-
-    /*
-     * 某些 AO3 内容 / userscript 可能在 DOMContentLoaded
-     * 之后继续修改正文。
-     *
-     * MutationObserver 可以在正文变化之后重新执行清理。
-     *
-     * 使用 debounce 避免一次 DOM 更新触发几十次清理。
-     */
 
     let workObserver = null;
     let cleanTimer = null;
@@ -337,27 +463,46 @@
 
     function observeWorkContent() {
         const workskin =
-            document.querySelector('#workskin');
+            document.querySelector(
+                '#workskin'
+            );
 
         if (!workskin) {
             return;
         }
 
-        // 避免重复 observer
+
+        /*
+         * 避免创建多个 observer。
+         */
+
         if (workObserver) {
             workObserver.disconnect();
         }
 
+
         workObserver =
-            new MutationObserver(() => {
+            new MutationObserver(
+                () => {
 
-                clearTimeout(cleanTimer);
+                    clearTimeout(
+                        cleanTimer
+                    );
 
-                cleanTimer =
-                    setTimeout(() => {
-                        cleanExtraBreaks();
-                    }, 100);
-            });
+
+                    /*
+                     * debounce
+                     *
+                     * 避免一次 DOM 大量变化时重复运行几十次。
+                     */
+
+                    cleanTimer =
+                        setTimeout(
+                            cleanExtraBreaks,
+                            120
+                        );
+                }
+            );
 
 
         workObserver.observe(
@@ -371,64 +516,75 @@
 
 
     // ============================================================
-    // 6. 生成并注入 AO3 样式表
+    // 8. AO3 阅读样式
     // ============================================================
 
     function applyStyles() {
-        const settings = getSettings();
-
-        if (!settings.enabled) {
-            const oldStyle =
-                document.getElementById(
-                    'ao3-site-wizard-custom-style'
-                );
-
-            if (oldStyle) {
-                oldStyle.textContent = '';
-            }
-
-            return;
-        }
+        const settings =
+            getSettings();
 
 
         const styleId =
             'ao3-site-wizard-custom-style';
 
         let styleEl =
-            document.getElementById(styleId);
+            document.getElementById(
+                styleId
+            );
 
 
         if (!styleEl) {
             styleEl =
-                document.createElement('style');
+                document.createElement(
+                    'style'
+                );
 
-            styleEl.id = styleId;
+            styleEl.id =
+                styleId;
 
             (
                 document.head ||
                 document.documentElement
-            ).appendChild(styleEl);
+            ).appendChild(
+                styleEl
+            );
         }
 
+
+        // --------------------------------------------------------
+        // 总开关关闭
+        // --------------------------------------------------------
+
+        if (!settings.enabled) {
+            styleEl.textContent = '';
+            return;
+        }
+
+
+        // --------------------------------------------------------
+        // CSS
+        // --------------------------------------------------------
 
         const cssRules = `
 
             /* ====================================================
-               1. 全局站点字体
+               全局字体
                ==================================================== */
 
             ${settings.siteFont ? `
+
             body,
             body *:not(code):not(pre):not(.icon) {
                 font-family:
                     ${settings.siteFont}
                     !important;
             }
+
             ` : ''}
 
 
             /* ====================================================
-               2. 正文基础设置
+               作品正文
                ==================================================== */
 
             #workskin,
@@ -457,7 +613,7 @@
 
 
             /* ====================================================
-               3. 段落设置
+               段落
                ==================================================== */
 
             #workskin .userstuff p {
@@ -475,7 +631,9 @@
                 ` : ''}
 
                 text-indent:
-                    ${settings.enableIndent ? '2em' : '0em'}
+                    ${settings.enableIndent
+                        ? '2em'
+                        : '0em'}
                     !important;
 
                 ${settings.justifyText ? `
@@ -487,7 +645,7 @@
 
 
             /* ====================================================
-               4. 阅读版心
+               阅读版心
                ==================================================== */
 
             #workskin .userstuff {
@@ -509,10 +667,11 @@
 
 
             /* ====================================================
-               5. 黑字 + 白底
+               高对比度模式
                ==================================================== */
 
             ${settings.highContrast ? `
+
             body,
             #outer,
             #inner,
@@ -528,37 +687,775 @@
                     #ffffff
                     !important;
             }
+
             ` : ''}
 
 
             /* ====================================================
-               6. 隐藏 Notes
+               隐藏 Notes
                ==================================================== */
 
             ${settings.hideNotes ? `
+
             #workskin .notes,
             #workskin .end.notes {
                 display:
                     none
                     !important;
             }
+
             ` : ''}
         `;
 
 
-        styleEl.textContent = cssRules;
+        styleEl.textContent =
+            cssRules;
 
-        // 每次重新应用设置时也清理正文
+
         cleanExtraBreaks();
     }
 
 
     // ============================================================
-    // 7. 控制面板
+    // 9. Site Wizard 设置面板 CSS
+    // ============================================================
+
+    function injectWizardStyles() {
+        if (
+            document.getElementById(
+                'ao3-site-wizard-ui-style'
+            )
+        ) {
+            return;
+        }
+
+
+        const style =
+            document.createElement(
+                'style'
+            );
+
+
+        style.id =
+            'ao3-site-wizard-ui-style';
+
+
+        style.textContent = `
+
+            /* ====================================================
+               Panel
+               ==================================================== */
+
+            #ao3-wizard-ui {
+
+                position:
+                    fixed;
+
+                top:
+                    max(20px, 7vh);
+
+                right:
+                    max(12px, 3vw);
+
+                z-index:
+                    999999;
+
+                width:
+                    min(
+                        390px,
+                        calc(100vw - 24px)
+                    );
+
+                max-height:
+                    86vh;
+
+                overflow-y:
+                    auto;
+
+                -webkit-overflow-scrolling:
+                    touch;
+
+                box-sizing:
+                    border-box;
+
+                padding:
+                    18px;
+
+                background:
+                    #ffffff;
+
+                color:
+                    #333333;
+
+                border:
+                    2px solid #990000;
+
+                border-radius:
+                    10px;
+
+                box-shadow:
+                    0 4px 18px
+                    rgba(0, 0, 0, 0.25);
+
+                font-size:
+                    15px;
+
+                line-height:
+                    1.45;
+
+                display:
+                    none;
+
+                font-family:
+                    Arial,
+                    sans-serif
+                    !important;
+            }
+
+
+            #ao3-wizard-ui *,
+            #ao3-wizard-ui *::before,
+            #ao3-wizard-ui *::after {
+
+                box-sizing:
+                    border-box;
+
+                font-family:
+                    Arial,
+                    sans-serif
+                    !important;
+            }
+
+
+            /* ====================================================
+               Header
+               ==================================================== */
+
+            #ao3-wizard-ui .wiz-header {
+
+                display:
+                    flex;
+
+                justify-content:
+                    space-between;
+
+                align-items:
+                    center;
+
+                min-height:
+                    48px;
+
+                margin-bottom:
+                    12px;
+
+                padding-bottom:
+                    8px;
+
+                border-bottom:
+                    1px solid #dddddd;
+            }
+
+
+            #ao3-wizard-ui .wiz-title {
+
+                margin:
+                    0;
+
+                padding:
+                    0;
+
+                color:
+                    #990000;
+
+                font-size:
+                    17px;
+
+                line-height:
+                    1.2;
+
+                font-weight:
+                    700;
+            }
+
+
+            /* ====================================================
+               Close button
+               ==================================================== */
+
+            #ao3-wizard-ui .wiz-close-button {
+
+                display:
+                    flex;
+
+                align-items:
+                    center;
+
+                justify-content:
+                    center;
+
+                flex:
+                    0 0 46px;
+
+                width:
+                    46px;
+
+                height:
+                    46px;
+
+                min-width:
+                    46px;
+
+                min-height:
+                    46px;
+
+                margin:
+                    -4px -4px -4px 10px;
+
+                padding:
+                    0;
+
+                border:
+                    1px solid transparent;
+
+                border-radius:
+                    7px;
+
+                background:
+                    transparent;
+
+                color:
+                    #666666;
+
+                font-size:
+                    23px;
+
+                line-height:
+                    1;
+
+                font-weight:
+                    bold;
+
+                cursor:
+                    pointer;
+
+                touch-action:
+                    manipulation;
+
+                -webkit-tap-highlight-color:
+                    transparent;
+            }
+
+
+            #ao3-wizard-ui .wiz-close-button:hover,
+            #ao3-wizard-ui .wiz-close-button:focus {
+
+                background:
+                    #f0f0f0;
+
+                color:
+                    #111111;
+
+                border-color:
+                    #cccccc;
+            }
+
+
+            /* ====================================================
+               Section divider
+               ==================================================== */
+
+            #ao3-wizard-ui .wiz-divider {
+
+                border:
+                    none;
+
+                border-top:
+                    1px dashed #cccccc;
+
+                margin:
+                    12px 0;
+            }
+
+
+            /* ====================================================
+               Text field label
+               ==================================================== */
+
+            #ao3-wizard-ui .wiz-field {
+
+                display:
+                    block;
+
+                margin-bottom:
+                    12px;
+
+                font-size:
+                    14px;
+
+                font-weight:
+                    600;
+
+                color:
+                    #333333;
+            }
+
+
+            /* ====================================================
+               Text inputs
+               ==================================================== */
+
+            #ao3-wizard-ui input[type="text"] {
+
+                display:
+                    block;
+
+                width:
+                    100%;
+
+                min-height:
+                    44px;
+
+                margin-top:
+                    5px;
+
+                padding:
+                    9px 10px;
+
+                border:
+                    1px solid #aaaaaa;
+
+                border-radius:
+                    6px;
+
+                background:
+                    #ffffff;
+
+                color:
+                    #222222;
+
+                font-size:
+                    16px;
+
+                line-height:
+                    1.2;
+
+                appearance:
+                    none;
+            }
+
+
+            #ao3-wizard-ui input[type="text"]:focus {
+
+                outline:
+                    2px solid #990000;
+
+                outline-offset:
+                    1px;
+
+                border-color:
+                    #990000;
+            }
+
+
+            /* ====================================================
+               Two-column input row
+               ==================================================== */
+
+            #ao3-wizard-ui .wiz-field-row {
+
+                display:
+                    grid;
+
+                grid-template-columns:
+                    1fr 1fr;
+
+                gap:
+                    12px;
+            }
+
+
+            /* ====================================================
+               Toggle rows
+               ==================================================== */
+
+            #ao3-wizard-ui .wiz-toggle-row {
+
+                display:
+                    flex;
+
+                align-items:
+                    center;
+
+                gap:
+                    13px;
+
+                width:
+                    100%;
+
+                min-height:
+                    50px;
+
+                margin:
+                    0;
+
+                padding:
+                    7px 5px;
+
+                border-radius:
+                    6px;
+
+                cursor:
+                    pointer;
+
+                user-select:
+                    none;
+
+                -webkit-user-select:
+                    none;
+
+                -webkit-tap-highlight-color:
+                    transparent;
+
+                color:
+                    #333333;
+            }
+
+
+            #ao3-wizard-ui .wiz-toggle-row:hover {
+
+                background:
+                    #f6f6f6;
+            }
+
+
+            #ao3-wizard-ui .wiz-toggle-row input[type="checkbox"] {
+
+                flex:
+                    0 0 24px;
+
+                width:
+                    24px;
+
+                height:
+                    24px;
+
+                min-width:
+                    24px;
+
+                min-height:
+                    24px;
+
+                margin:
+                    0;
+
+                cursor:
+                    pointer;
+
+                accent-color:
+                    #990000;
+            }
+
+
+            #ao3-wizard-ui .wiz-toggle-label {
+
+                flex:
+                    1;
+
+                font-size:
+                    15px;
+
+                line-height:
+                    1.35;
+
+                cursor:
+                    pointer;
+            }
+
+
+            /* ====================================================
+               Save area
+               ==================================================== */
+
+            #ao3-wizard-ui .wiz-save-area {
+
+                display:
+                    flex;
+
+                justify-content:
+                    flex-end;
+
+                margin-top:
+                    14px;
+            }
+
+
+            #ao3-wizard-ui .wiz-save-button {
+
+                min-height:
+                    50px;
+
+                min-width:
+                    130px;
+
+                padding:
+                    10px 20px;
+
+                border:
+                    2px solid #990000;
+
+                border-radius:
+                    7px;
+
+                background:
+                    #990000;
+
+                color:
+                    #ffffff;
+
+                font-size:
+                    15px;
+
+                line-height:
+                    1.2;
+
+                font-weight:
+                    700;
+
+                cursor:
+                    pointer;
+
+                touch-action:
+                    manipulation;
+
+                -webkit-tap-highlight-color:
+                    transparent;
+
+                transition:
+                    none;
+            }
+
+
+            #ao3-wizard-ui .wiz-save-button:hover,
+            #ao3-wizard-ui .wiz-save-button:focus {
+
+                background:
+                    #770000;
+
+                border-color:
+                    #770000;
+            }
+
+
+            #ao3-wizard-ui .wiz-save-button.saved {
+
+                background:
+                    #ffffff;
+
+                color:
+                    #333333;
+
+                border-color:
+                    #777777;
+            }
+
+
+            /* ====================================================
+               Tablet / touch devices
+               ==================================================== */
+
+            @media
+            (pointer: coarse),
+            (max-width: 800px) {
+
+                #ao3-wizard-ui {
+
+                    top:
+                        12px;
+
+                    right:
+                        12px;
+
+                    width:
+                        min(
+                            420px,
+                            calc(100vw - 24px)
+                        );
+
+                    max-height:
+                        calc(100vh - 24px);
+
+                    padding:
+                        18px;
+
+                    font-size:
+                        16px;
+                }
+
+
+                #ao3-wizard-ui .wiz-toggle-row {
+
+                    min-height:
+                        56px;
+
+                    padding:
+                        9px 6px;
+                }
+
+
+                #ao3-wizard-ui .wiz-toggle-row input[type="checkbox"] {
+
+                    width:
+                        26px;
+
+                    height:
+                        26px;
+
+                    min-width:
+                        26px;
+
+                    min-height:
+                        26px;
+
+                    flex-basis:
+                        26px;
+                }
+
+
+                #ao3-wizard-ui .wiz-toggle-label {
+
+                    font-size:
+                        16px;
+                }
+
+
+                #ao3-wizard-ui input[type="text"] {
+
+                    min-height:
+                        48px;
+
+                    padding:
+                        10px 11px;
+
+                    font-size:
+                        16px;
+                }
+
+
+                #ao3-wizard-ui .wiz-save-button {
+
+                    min-height:
+                        54px;
+
+                    padding:
+                        11px 22px;
+
+                    font-size:
+                        16px;
+                }
+
+
+                #ao3-wizard-ui .wiz-close-button {
+
+                    width:
+                        50px;
+
+                    height:
+                        50px;
+
+                    min-width:
+                        50px;
+
+                    min-height:
+                        50px;
+
+                    flex-basis:
+                        50px;
+                }
+            }
+
+
+            /* ====================================================
+               Narrow screens
+               ==================================================== */
+
+            @media
+            (max-width: 480px) {
+
+                #ao3-wizard-ui {
+
+                    left:
+                        8px;
+
+                    right:
+                        8px;
+
+                    top:
+                        8px;
+
+                    width:
+                        auto;
+
+                    max-height:
+                        calc(100vh - 16px);
+
+                    padding:
+                        15px;
+                }
+
+
+                #ao3-wizard-ui .wiz-field-row {
+
+                    grid-template-columns:
+                        1fr;
+                }
+
+
+                #ao3-wizard-ui .wiz-save-button {
+
+                    width:
+                        100%;
+                }
+            }
+
+
+            /* ====================================================
+               减少墨水屏 / reduced motion 不必要动画
+               ==================================================== */
+
+            @media
+            (prefers-reduced-motion: reduce) {
+
+                #ao3-wizard-ui *,
+                #ao3-wizard-ui *::before,
+                #ao3-wizard-ui *::after {
+
+                    scroll-behavior:
+                        auto !important;
+
+                    animation:
+                        none !important;
+
+                    transition:
+                        none !important;
+                }
+            }
+        `;
+
+
+        (
+            document.head ||
+            document.documentElement
+        ).appendChild(
+            style
+        );
+    }
+
+
+    // ============================================================
+    // 10. 设置面板
     // ============================================================
 
     function createUI() {
-
         if (
             document.getElementById(
                 'ao3-wizard-ui'
@@ -568,12 +1465,16 @@
         }
 
 
-        const settings = getSettings();
+        injectWizardStyles();
 
 
-        // --------------------------------------------------------
-        // Userscripts 导航菜单
-        // --------------------------------------------------------
+        const settings =
+            getSettings();
+
+
+        // ========================================================
+        // AO3 Userscripts 菜单
+        // ========================================================
 
         const primaryNav =
             document.querySelector(
@@ -582,24 +1483,23 @@
 
 
         if (primaryNav) {
-
             let userscriptMenu =
                 primaryNav.querySelector(
                     'li#scriptconfig'
                 );
 
 
-            // 如果没有 #scriptconfig，
-            // 尝试通过 Userscripts 文本寻找
-            if (!userscriptMenu) {
+            // ----------------------------------------------------
+            // 找不到 #scriptconfig 时，按菜单文字查找
+            // ----------------------------------------------------
 
+            if (!userscriptMenu) {
                 const lis =
                     primaryNav.querySelectorAll(
                         'li.dropdown'
                     );
 
-                for (let li of lis) {
-
+                for (const li of lis) {
                     const a =
                         li.querySelector('a');
 
@@ -608,7 +1508,7 @@
                         a.textContent
                             .trim()
                             .toLowerCase() ===
-                        'userscripts'
+                            'userscripts'
                     ) {
                         userscriptMenu = li;
                         break;
@@ -620,18 +1520,27 @@
             let menuList = null;
 
 
-            if (userscriptMenu) {
+            // ----------------------------------------------------
+            // 已存在 Userscripts 菜单
+            // ----------------------------------------------------
 
+            if (userscriptMenu) {
                 menuList =
                     userscriptMenu.querySelector(
                         'ul.menu'
                     );
+            }
 
-            } else {
 
-                // 没有 Userscripts 菜单就自行创建
+            // ----------------------------------------------------
+            // 不存在则创建
+            // ----------------------------------------------------
+
+            else {
                 userscriptMenu =
-                    document.createElement('li');
+                    document.createElement(
+                        'li'
+                    );
 
                 userscriptMenu.className =
                     'dropdown';
@@ -657,7 +1566,6 @@
                 `;
 
 
-                // 插到 Search 左边
                 const searchItem =
                     primaryNav.querySelector(
                         'li.search'
@@ -665,14 +1573,11 @@
 
 
                 if (searchItem) {
-
                     primaryNav.insertBefore(
                         userscriptMenu,
                         searchItem
                     );
-
                 } else {
-
                     primaryNav.appendChild(
                         userscriptMenu
                     );
@@ -687,7 +1592,7 @@
 
 
             // ----------------------------------------------------
-            // 添加 Site Wizard 菜单项
+            // Site Wizard 菜单项
             // ----------------------------------------------------
 
             if (
@@ -696,9 +1601,10 @@
                     'opencfg_site_wizard'
                 )
             ) {
-
                 const menuItem =
-                    document.createElement('li');
+                    document.createElement(
+                        'li'
+                    );
 
 
                 menuItem.innerHTML = `
@@ -718,190 +1624,103 @@
         }
 
 
-        // --------------------------------------------------------
-        // 控制面板本体
-        // --------------------------------------------------------
+        // ========================================================
+        // 面板本体
+        // ========================================================
 
         const container =
-            document.createElement('div');
+            document.createElement(
+                'div'
+            );
 
 
         container.id =
             'ao3-wizard-ui';
 
 
-        container.style.cssText = `
-            position: fixed;
-            top: 15%;
-            right: 20px;
-            z-index: 999999;
-
-            background: #fff;
-
-            border:
-                2px solid #900;
-
-            padding:
-                14px 16px;
-
-            border-radius:
-                8px;
-
-            box-shadow:
-                0 4px 16px
-                rgba(0,0,0,0.25);
-
-            font-size:
-                13px;
-
-            color:
-                #333;
-
-            width:
-                290px;
-
-            max-height:
-                80vh;
-
-            overflow-y:
-                auto;
-
-            display:
-                none;
-
-            box-sizing:
-                border-box;
-        `;
-
-
         container.innerHTML = `
 
-            <div
-                style="
-                    display:flex;
-                    justify-content:space-between;
-                    align-items:center;
-                    border-bottom:1px solid #ddd;
-                    padding-bottom:6px;
-                    margin-bottom:10px;
-                "
-            >
+            <div class="wiz-header">
 
-                <h3
-                    style="
-                        margin:0;
-                        font-size:15px;
-                        color:#900;
-                    "
-                >
+                <h3 class="wiz-title">
                     AO3 Site Wizard
                 </h3>
 
-                <span
+                <button
+                    type="button"
                     id="wiz-close"
-                    style="
-                        cursor:pointer;
-                        font-weight:bold;
-                        color:#888;
-                        font-size:16px;
-                    "
+                    class="wiz-close-button"
+                    aria-label="关闭设置"
+                    title="关闭"
                 >
                     ✕
-                </span>
+                </button>
 
             </div>
 
 
-            <label
-                style="
-                    display:block;
-                    margin-bottom:8px;
-                    font-weight:bold;
-                "
-            >
+            <label class="wiz-toggle-row">
 
                 <input
                     type="checkbox"
                     id="wiz-enable"
-                    ${settings.enabled ? 'checked' : ''}
+                    ${settings.enabled
+                        ? 'checked'
+                        : ''}
                 >
 
-                启用自定义样式
+                <span class="wiz-toggle-label">
+                    启用自定义样式
+                </span>
 
             </label>
 
 
-            <hr
-                style="
-                    border:none;
-                    border-top:1px dashed #ccc;
-                    margin:8px 0;
-                "
-            >
+            <hr class="wiz-divider">
 
 
-            <label
-                style="
-                    display:block;
-                    margin-bottom:6px;
-                "
-            >
+            <label class="wiz-field">
 
-                正文字体 (Work Font):
+                正文字体 (Work Font)
 
                 <input
                     type="text"
                     id="wiz-work-font"
-                    value='${settings.workFont}'
-                    style="
-                        width:100%;
-                        box-sizing:border-box;
-                        margin-top:2px;
-                    "
+                    value="${escapeHtmlAttribute(
+                        settings.workFont
+                    )}"
                 >
 
             </label>
 
 
-            <div
-                style="
-                    display:flex;
-                    gap:8px;
-                    margin-bottom:6px;
-                "
-            >
+            <div class="wiz-field-row">
 
-                <label style="flex:1;">
+                <label class="wiz-field">
 
-                    字号:
+                    字号
 
                     <input
                         type="text"
                         id="wiz-font-size"
-                        value='${settings.fontSize}'
-                        style="
-                            width:100%;
-                            box-sizing:border-box;
-                            margin-top:2px;
-                        "
+                        value="${escapeHtmlAttribute(
+                            settings.fontSize
+                        )}"
                     >
 
                 </label>
 
 
-                <label style="flex:1;">
+                <label class="wiz-field">
 
-                    行高:
+                    行高
 
                     <input
                         type="text"
                         id="wiz-line-height"
-                        value='${settings.lineHeight}'
-                        style="
-                            width:100%;
-                            box-sizing:border-box;
-                            margin-top:2px;
-                        "
+                        value="${escapeHtmlAttribute(
+                            settings.lineHeight
+                        )}"
                     >
 
                 </label>
@@ -909,45 +1728,33 @@
             </div>
 
 
-            <div
-                style="
-                    display:flex;
-                    gap:8px;
-                    margin-bottom:6px;
-                "
-            >
+            <div class="wiz-field-row">
 
-                <label style="flex:1;">
+                <label class="wiz-field">
 
-                    字间距:
+                    字间距
 
                     <input
                         type="text"
                         id="wiz-letter-spacing"
-                        value='${settings.letterSpacing}'
-                        style="
-                            width:100%;
-                            box-sizing:border-box;
-                            margin-top:2px;
-                        "
+                        value="${escapeHtmlAttribute(
+                            settings.letterSpacing
+                        )}"
                     >
 
                 </label>
 
 
-                <label style="flex:1;">
+                <label class="wiz-field">
 
-                    段间距:
+                    段间距
 
                     <input
                         type="text"
                         id="wiz-para-spacing"
-                        value='${settings.paragraphSpacing}'
-                        style="
-                            width:100%;
-                            box-sizing:border-box;
-                            margin-top:2px;
-                        "
+                        value="${escapeHtmlAttribute(
+                            settings.paragraphSpacing
+                        )}"
                     >
 
                 </label>
@@ -955,148 +1762,115 @@
             </div>
 
 
-            <div
-                style="
-                    margin-bottom:8px;
-                "
-            >
+            <label class="wiz-field">
 
-                <label
-                    style="
-                        display:block;
-                    "
+                最大版宽
+
+                <input
+                    type="text"
+                    id="wiz-max-width"
+                    value="${escapeHtmlAttribute(
+                        settings.maxWidth
+                    )}"
                 >
 
-                    最大版宽:
-
-                    <input
-                        type="text"
-                        id="wiz-max-width"
-                        value='${settings.maxWidth}'
-                        style="
-                            width:100%;
-                            box-sizing:border-box;
-                            margin-top:2px;
-                        "
-                    >
-
-                </label>
-
-            </div>
+            </label>
 
 
-            <hr
-                style="
-                    border:none;
-                    border-top:1px dashed #ccc;
-                    margin:8px 0;
-                "
-            >
+            <hr class="wiz-divider">
 
 
-            <label
-                style="
-                    display:block;
-                    margin-bottom:4px;
-                "
-            >
+            <label class="wiz-toggle-row">
 
                 <input
                     type="checkbox"
                     id="wiz-clean-breaks"
-                    ${settings.cleanBreaks ? 'checked' : ''}
+                    ${settings.cleanBreaks
+                        ? 'checked'
+                        : ''}
                 >
 
-                移除多余空行 / 空段落
+                <span class="wiz-toggle-label">
+                    移除多余空行 / 空段落
+                </span>
 
             </label>
 
 
-            <label
-                style="
-                    display:block;
-                    margin-bottom:4px;
-                "
-            >
+            <label class="wiz-toggle-row">
 
                 <input
                     type="checkbox"
                     id="wiz-indent"
-                    ${settings.enableIndent ? 'checked' : ''}
+                    ${settings.enableIndent
+                        ? 'checked'
+                        : ''}
                 >
 
-                首行缩进 2 个中文字符
+                <span class="wiz-toggle-label">
+                    首行缩进 2 个中文字符
+                </span>
 
             </label>
 
 
-            <label
-                style="
-                    display:block;
-                    margin-bottom:4px;
-                "
-            >
+            <label class="wiz-toggle-row">
 
                 <input
                     type="checkbox"
                     id="wiz-justify"
-                    ${settings.justifyText ? 'checked' : ''}
+                    ${settings.justifyText
+                        ? 'checked'
+                        : ''}
                 >
 
-                正文两端对齐
+                <span class="wiz-toggle-label">
+                    正文两端对齐
+                </span>
 
             </label>
 
 
-            <label
-                style="
-                    display:block;
-                    margin-bottom:4px;
-                "
-            >
+            <label class="wiz-toggle-row">
 
                 <input
                     type="checkbox"
                     id="wiz-contrast"
-                    ${settings.highContrast ? 'checked' : ''}
+                    ${settings.highContrast
+                        ? 'checked'
+                        : ''}
                 >
 
-                强制纯黑文字 + 纯白背景
+                <span class="wiz-toggle-label">
+                    强制纯黑文字 + 纯白背景
+                </span>
 
             </label>
 
 
-            <label
-                style="
-                    display:block;
-                    margin-bottom:12px;
-                "
-            >
+            <label class="wiz-toggle-row">
 
                 <input
                     type="checkbox"
                     id="wiz-hide-notes"
-                    ${settings.hideNotes ? 'checked' : ''}
+                    ${settings.hideNotes
+                        ? 'checked'
+                        : ''}
                 >
 
-                隐藏作者前言/后记 (Notes)
+                <span class="wiz-toggle-label">
+                    隐藏作者前言 / 后记 (Notes)
+                </span>
 
             </label>
 
 
-            <div style="text-align:right;">
+            <div class="wiz-save-area">
 
                 <button
+                    type="button"
                     id="wiz-save"
-                    style="
-                        background:#900;
-                        color:#fff;
-                        border:none;
-                        padding:6px 14px;
-                        border-radius:4px;
-                        cursor:pointer;
-                        font-weight:bold;
-                    "
+                    class="wiz-save-button"
                 >
                     保存并生效
                 </button>
@@ -1110,22 +1884,37 @@
         );
 
 
-        // --------------------------------------------------------
-        // 面板开关
-        // --------------------------------------------------------
+        // ========================================================
+        // 打开 / 关闭
+        // ========================================================
 
-        const toggleUI = (e) => {
+        const toggleUI =
+            event => {
 
-            if (e) {
-                e.preventDefault();
-            }
+                if (event) {
+                    event.preventDefault();
+                }
 
-            container.style.display =
-                container.style.display === 'none'
-                    ? 'block'
-                    : 'none';
-        };
 
+                const isHidden =
+                    container.style.display ===
+                    'none' ||
+                    getComputedStyle(
+                        container
+                    ).display ===
+                    'none';
+
+
+                container.style.display =
+                    isHidden
+                        ? 'block'
+                        : 'none';
+            };
+
+
+        // ========================================================
+        // Userscripts 菜单
+        // ========================================================
 
         const navLink =
             document.getElementById(
@@ -1141,178 +1930,305 @@
         }
 
 
+        // ========================================================
+        // X 关闭
+        // ========================================================
+
         document
-            .getElementById('wiz-close')
+            .getElementById(
+                'wiz-close'
+            )
             .addEventListener(
                 'click',
-                toggleUI
+                () => {
+                    container.style.display =
+                        'none';
+                }
             );
 
 
-        // --------------------------------------------------------
-        // 快捷键 Shift + Alt + W
-        // --------------------------------------------------------
+        // ========================================================
+        // Shift + Alt + W
+        // ========================================================
 
         document.addEventListener(
             'keydown',
-            (e) => {
+            event => {
 
                 if (
-                    e.shiftKey &&
-                    e.altKey &&
-                    e.code === 'KeyW'
+                    event.shiftKey &&
+                    event.altKey &&
+                    event.code === 'KeyW'
                 ) {
-                    toggleUI();
+                    toggleUI(
+                        event
+                    );
                 }
             }
         );
 
 
-        // --------------------------------------------------------
-        // 保存设置
-        // --------------------------------------------------------
+        // ========================================================
+        // 保存
+        // ========================================================
 
-        document
-            .getElementById('wiz-save')
-            .addEventListener(
-                'click',
-                () => {
-
-                    const newSettings = {
-
-                        enabled:
-                            document
-                                .getElementById(
-                                    'wiz-enable'
-                                )
-                                .checked,
-
-                        siteFont:
-                            settings.siteFont,
-
-                        workFont:
-                            document
-                                .getElementById(
-                                    'wiz-work-font'
-                                )
-                                .value,
-
-                        fontSize:
-                            document
-                                .getElementById(
-                                    'wiz-font-size'
-                                )
-                                .value,
-
-                        lineHeight:
-                            document
-                                .getElementById(
-                                    'wiz-line-height'
-                                )
-                                .value,
-
-                        letterSpacing:
-                            document
-                                .getElementById(
-                                    'wiz-letter-spacing'
-                                )
-                                .value,
-
-                        paragraphSpacing:
-                            document
-                                .getElementById(
-                                    'wiz-para-spacing'
-                                )
-                                .value,
-
-                        maxWidth:
-                            document
-                                .getElementById(
-                                    'wiz-max-width'
-                                )
-                                .value,
-
-                        cleanBreaks:
-                            document
-                                .getElementById(
-                                    'wiz-clean-breaks'
-                                )
-                                .checked,
-
-                        enableIndent:
-                            document
-                                .getElementById(
-                                    'wiz-indent'
-                                )
-                                .checked,
-
-                        justifyText:
-                            document
-                                .getElementById(
-                                    'wiz-justify'
-                                )
-                                .checked,
-
-                        highContrast:
-                            document
-                                .getElementById(
-                                    'wiz-contrast'
-                                )
-                                .checked,
-
-                        hideNotes:
-                            document
-                                .getElementById(
-                                    'wiz-hide-notes'
-                                )
-                                .checked
-                    };
+        const saveButton =
+            document.getElementById(
+                'wiz-save'
+            );
 
 
-                    saveSettings(
-                        newSettings
+        let saveFeedbackTimer =
+            null;
+
+
+        saveButton.addEventListener(
+            'click',
+            () => {
+
+                const currentSettings =
+                    getSettings();
+
+
+                const newSettings = {
+
+                    enabled:
+                        document
+                            .getElementById(
+                                'wiz-enable'
+                            )
+                            .checked,
+
+                    /*
+                     * siteFont 当前没有单独 UI，
+                     * 保留已有配置。
+                     */
+
+                    siteFont:
+                        currentSettings.siteFont,
+
+                    workFont:
+                        document
+                            .getElementById(
+                                'wiz-work-font'
+                            )
+                            .value
+                            .trim(),
+
+                    fontSize:
+                        document
+                            .getElementById(
+                                'wiz-font-size'
+                            )
+                            .value
+                            .trim(),
+
+                    lineHeight:
+                        document
+                            .getElementById(
+                                'wiz-line-height'
+                            )
+                            .value
+                            .trim(),
+
+                    letterSpacing:
+                        document
+                            .getElementById(
+                                'wiz-letter-spacing'
+                            )
+                            .value
+                            .trim(),
+
+                    paragraphSpacing:
+                        document
+                            .getElementById(
+                                'wiz-para-spacing'
+                            )
+                            .value
+                            .trim(),
+
+                    maxWidth:
+                        document
+                            .getElementById(
+                                'wiz-max-width'
+                            )
+                            .value
+                            .trim(),
+
+                    cleanBreaks:
+                        document
+                            .getElementById(
+                                'wiz-clean-breaks'
+                            )
+                            .checked,
+
+                    enableIndent:
+                        document
+                            .getElementById(
+                                'wiz-indent'
+                            )
+                            .checked,
+
+                    justifyText:
+                        document
+                            .getElementById(
+                                'wiz-justify'
+                            )
+                            .checked,
+
+                    highContrast:
+                        document
+                            .getElementById(
+                                'wiz-contrast'
+                            )
+                            .checked,
+
+                    hideNotes:
+                        document
+                            .getElementById(
+                                'wiz-hide-notes'
+                            )
+                            .checked
+                };
+
+
+                // ------------------------------------------------
+                // 保存至 GM Storage
+                // ------------------------------------------------
+
+                saveSettings(
+                    newSettings
+                );
+
+
+                // ------------------------------------------------
+                // 即时应用
+                // ------------------------------------------------
+
+                applyStyles();
+
+
+                // ------------------------------------------------
+                // 重建正文监听
+                // ------------------------------------------------
+
+                observeWorkContent();
+
+
+                // ------------------------------------------------
+                // 保存反馈
+                //
+                // 不关闭设置面板。
+                // ------------------------------------------------
+
+                clearTimeout(
+                    saveFeedbackTimer
+                );
+
+
+                saveButton.textContent =
+                    '✓ 已保存';
+
+                saveButton.classList.add(
+                    'saved'
+                );
+
+
+                saveFeedbackTimer =
+                    setTimeout(
+                        () => {
+
+                            saveButton.textContent =
+                                '保存并生效';
+
+                            saveButton.classList.remove(
+                                'saved'
+                            );
+
+                        },
+                        1200
                     );
+            }
+        );
+    }
 
 
-                    applyStyles();
+    // ============================================================
+    // 11. HTML attribute escaping
+    // ============================================================
 
+    /*
+     * 防止用户输入的字体名等包含引号时，
+     * 破坏 value=""。
+     */
 
-                    // 设置修改后重新建立观察器
-                    observeWorkContent();
-
-
-                    // container.style.display =
-                    //     'none';
-                }
+    function escapeHtmlAttribute(value) {
+        return String(value ?? '')
+            .replace(
+                /&/g,
+                '&amp;'
+            )
+            .replace(
+                /"/g,
+                '&quot;'
+            )
+            .replace(
+                /</g,
+                '&lt;'
+            )
+            .replace(
+                />/g,
+                '&gt;'
             );
     }
 
 
     // ============================================================
-    // 8. 初始化
+    // 12. 初始化
     // ============================================================
 
-    // document-start 阶段先尝试应用样式。
-    // 此时正文可能还不存在，这是正常的。
+    /*
+     * document-start 时先应用样式。
+     *
+     * 正文可能尚未生成，
+     * cleanExtraBreaks() 会自动安全退出。
+     */
+
     applyStyles();
 
 
     function initialize() {
 
+        injectWizardStyles();
+
         createUI();
 
-        // 首次完整清理
+
+        // --------------------------------------------------------
+        // 第一次正文清理
+        // --------------------------------------------------------
+
         cleanExtraBreaks();
 
-        // 开始监听后续正文变化
+
+        // --------------------------------------------------------
+        // 监听动态正文
+        // --------------------------------------------------------
+
         observeWorkContent();
 
-        // AO3 / 其它 userscript 偶尔会稍晚插入正文，
-        // 再做一次保险清理。
+
+        // --------------------------------------------------------
+        // 延迟保险清理
+        //
+        // 兼容 AO3 / 其它 userscript 稍晚插入内容。
+        // --------------------------------------------------------
+
         setTimeout(
             cleanExtraBreaks,
             250
         );
+
 
         setTimeout(
             cleanExtraBreaks,
@@ -1322,7 +2238,8 @@
 
 
     if (
-        document.readyState === 'loading'
+        document.readyState ===
+        'loading'
     ) {
 
         document.addEventListener(
