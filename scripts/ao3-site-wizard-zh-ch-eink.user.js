@@ -2,7 +2,7 @@
 // @name         AO3: Site Wizard - ZH-CN & E-Ink Reader Optimised
 // @name:zh-CN   AO3：Site Wizard - 中文 & 墨水屏设备优化版
 // @namespace    https://greasyfork.org/users/1639523-syoius
-// @version      2.3.2
+// @version      2.3.3
 // @description  A compact AO3 reading edition with configurable typography, resilient storage, e-ink contrast, and optional instant page-turn controls.
 // @description:zh-CN  AO3 阅读优化脚本：集成中文字体与排版、空行清理、兼容式设置存储、高对比度模式及双侧无动画整页翻页按钮。
 // @author       syoius
@@ -35,6 +35,7 @@
  * - independently selectable CJK and Latin reading fonts
  * - enhanced removal of empty paragraphs and nested blank elements
  * - first-line indentation for BR-separated pseudo paragraphs
+ * - reversible normalization of author-supplied paragraph indentation spaces
  * - optional spacing at Chinese / English and punctuation / English boundaries
  * - selectable seamless next-chapter loading / prefetch modes
  * - low-frequency update checks with an in-page notification
@@ -1247,6 +1248,18 @@
         'wiz-br-separated-line';
 
 
+    const LEADING_INDENT_WHITESPACE =
+        /^[\t\n\f\r \u00A0\u1680\u180E\u2000-\u200A\u2028\u2029\u202F\u205F\u2060\u3000\uFEFF]+/;
+
+
+    const ONLY_INDENT_WHITESPACE =
+        /^[\t\n\f\r \u00A0\u1680\u180E\u2000-\u200A\u2028\u2029\u202F\u205F\u2060\u3000\uFEFF]*$/;
+
+
+    const removedIndentPrefixByNode =
+        new WeakMap();
+
+
     function hasDirectBreak(paragraph) {
 
         return Array.from(
@@ -1542,6 +1555,297 @@
         ]);
 
 
+    // ============================================================
+    // 6.5 Author indentation-space normalization
+    // ============================================================
+
+    function stripLeadingIndentWhitespace(value) {
+
+        const text =
+            String(value || '');
+
+
+        const match =
+            text.match(
+                LEADING_INDENT_WHITESPACE
+            );
+
+
+        const prefix =
+            match
+                ? match[0]
+                : '';
+
+
+        return {
+            prefix,
+            text:
+                prefix
+                    ? text.slice(
+                        prefix.length
+                    )
+                    : text
+        };
+    }
+
+
+    function getLeadingParagraphTextNodes(container) {
+
+        if (
+            !container ||
+            container.closest(
+                'pre, code, kbd, samp, textarea, .blockcode'
+            )
+        ) {
+            return [];
+        }
+
+
+        const leadingNodes =
+            [];
+
+
+        let foundText =
+            false;
+
+
+        let blocked =
+            false;
+
+
+        function visit(parent) {
+
+            for (
+                let child =
+                    parent.firstChild;
+                child;
+                child =
+                    child.nextSibling
+            ) {
+
+                if (
+                    child.nodeType ===
+                    Node.TEXT_NODE
+                ) {
+
+                    const value =
+                        child.nodeValue || '';
+
+
+                    leadingNodes.push(
+                        child
+                    );
+
+
+                    if (
+                        !ONLY_INDENT_WHITESPACE.test(
+                            value
+                        )
+                    ) {
+                        foundText =
+                            true;
+
+                        return true;
+                    }
+
+
+                    continue;
+                }
+
+
+                if (
+                    child.nodeType !==
+                    Node.ELEMENT_NODE
+                ) {
+                    continue;
+                }
+
+
+                const element =
+                    child;
+
+
+                const tagName =
+                    String(
+                        element.localName ||
+                        element.tagName ||
+                        ''
+                    ).toUpperCase();
+
+
+                if (
+                    SPACING_EXCLUDED_TAGS.has(
+                        tagName
+                    ) ||
+                    TEXT_FLOW_BOUNDARY_TAGS.has(
+                        tagName
+                    ) ||
+                    element.isContentEditable ||
+                    element.getAttribute(
+                        'aria-hidden'
+                    ) === 'true'
+                ) {
+                    blocked =
+                        true;
+
+                    return true;
+                }
+
+
+                if (visit(element)) {
+                    return true;
+                }
+            }
+
+
+            return false;
+        }
+
+
+        visit(container);
+
+
+        return (
+            foundText &&
+            !blocked
+        )
+            ? leadingNodes
+            : [];
+    }
+
+
+    function removeAuthorIndentation(container) {
+
+        const leadingNodes =
+            getLeadingParagraphTextNodes(
+                container
+            );
+
+
+        leadingNodes.forEach(
+            node => {
+
+                const result =
+                    stripLeadingIndentWhitespace(
+                        node.nodeValue
+                    );
+
+
+                if (!result.prefix) {
+                    return;
+                }
+
+
+                removedIndentPrefixByNode.set(
+                    node,
+                    result.prefix
+                );
+
+
+                node.nodeValue =
+                    result.text;
+            }
+        );
+    }
+
+
+    function restoreAuthorIndentation() {
+
+        document
+            .querySelectorAll(
+                '#workskin .userstuff'
+            )
+            .forEach(
+                userstuff => {
+
+                    const walker =
+                        document.createTreeWalker(
+                            userstuff,
+                            NodeFilter.SHOW_TEXT
+                        );
+
+
+                    let node =
+                        walker.nextNode();
+
+
+                    while (node) {
+
+                        if (
+                            removedIndentPrefixByNode.has(
+                                node
+                            )
+                        ) {
+                            node.nodeValue =
+                                `${removedIndentPrefixByNode.get(node)}${node.nodeValue || ''}`;
+
+
+                            removedIndentPrefixByNode.delete(
+                                node
+                            );
+                        }
+
+
+                        node =
+                            walker.nextNode();
+                    }
+                }
+            );
+    }
+
+
+    function formatLeadingIndentation() {
+
+        const settings =
+            getSettings();
+
+
+        if (
+            !settings.enabled ||
+            !settings.enableIndent
+        ) {
+            return;
+        }
+
+
+        document
+            .querySelectorAll(
+                '#workskin .userstuff p'
+            )
+            .forEach(
+                paragraph => {
+
+                    if (
+                        paragraph.classList.contains(
+                            BR_PARAGRAPH_CLASS
+                        )
+                    ) {
+                        Array.from(
+                            paragraph.children
+                        )
+                            .filter(
+                                child => (
+                                    child.classList.contains(
+                                        BR_PARAGRAPH_LINE_CLASS
+                                    )
+                                )
+                            )
+                            .forEach(
+                                removeAuthorIndentation
+                            );
+
+                        return;
+                    }
+
+
+                    removeAuthorIndentation(
+                        paragraph
+                    );
+                }
+            );
+    }
+
+
     function getCjkEnglishSpacing(left, right) {
 
         if (
@@ -1760,9 +2064,13 @@
 
     function processWorkContent() {
 
+        restoreAuthorIndentation();
+
         cleanExtraBreaks();
 
         formatBrSeparatedParagraphs();
+
+        formatLeadingIndentation();
 
         addCjkEnglishSpacing();
     }
