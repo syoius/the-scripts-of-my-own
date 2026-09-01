@@ -2,9 +2,9 @@
 // @name         AO3: Site Wizard - ZH-CN & E-Ink Reader Optimised
 // @name:zh-CN   AO3：Site Wizard - 中文 & 墨水屏设备优化版
 // @namespace    https://greasyfork.org/users/1639523-syoius
-// @version      2.2.3
-// @description  A compact reading-focused edition of AO3: Site Wizard with LXGW WenKai, enhanced blank-line cleanup, resilient settings storage, and configurable reading layout.
-// @description:zh-CN  AO3 阅读优化脚本：集成霞鹜文楷、正文排版、异常空行清理、兼容式设置存储、高对比度模式及紧凑触控设置面板。
+// @version      2.3.2
+// @description  A compact AO3 reading edition with configurable typography, resilient storage, e-ink contrast, and optional instant page-turn controls.
+// @description:zh-CN  AO3 阅读优化脚本：集成中文字体与排版、空行清理、兼容式设置存储、高对比度模式及双侧无动画整页翻页按钮。
 // @author       syoius
 // @match        *://archiveofourown.org/*
 // @match        *://*.archiveofourown.org/*
@@ -46,6 +46,7 @@
  * - compact settings panel designed for desktop, tablet, and e-ink devices
  * - save-without-closing settings workflow
  * - high-contrast black-text / white-background reading mode
+ * - slim dual-side, instant whole-page controls for e-ink readers
  *
  *
  * MIT License
@@ -494,6 +495,9 @@
         highContrast:
             true,
 
+        showPageTurnControls:
+            false,
+
         hideNotes:
             false
     };
@@ -629,6 +633,14 @@
             getPresetFontWeight(
                 fontPreset,
                 customFontBold
+            );
+
+
+        merged.showPageTurnControls =
+            Boolean(
+                stored &&
+                stored.showPageTurnControls ===
+                    true
             );
 
 
@@ -3888,6 +3900,10 @@
         'ao3_site_wizard_ui_state';
 
 
+    const PAGE_TURN_CONTROLS_ID =
+        'ao3-wizard-page-turn-controls';
+
+
     function injectWizardStyles() {
 
         if (
@@ -4386,6 +4402,297 @@
                     #ffffff;
             }
 
+
+            /* ====================================================
+               Fixed dual-side page-turn rails
+               ==================================================== */
+
+            html.ao3-wizard-page-turn-enabled body {
+
+                box-sizing:
+                    border-box;
+
+                padding-left:
+                    32px !important;
+
+                padding-left:
+                    calc(
+                        32px +
+                        env(safe-area-inset-left)
+                    ) !important;
+
+                padding-right:
+                    32px !important;
+
+                padding-right:
+                    calc(
+                        32px +
+                        env(safe-area-inset-right)
+                    ) !important;
+            }
+
+
+            html.ao3-wizard-instant-page-turn,
+            html.ao3-wizard-instant-page-turn body {
+
+                scroll-behavior:
+                    auto !important;
+            }
+
+
+            #${PAGE_TURN_CONTROLS_ID} {
+
+                position:
+                    fixed;
+
+                inset:
+                    0;
+
+                z-index:
+                    999998;
+
+                display:
+                    block;
+
+                margin:
+                    0;
+
+                padding:
+                    0;
+
+                pointer-events:
+                    none;
+
+                box-sizing:
+                    border-box;
+            }
+
+
+            #${PAGE_TURN_CONTROLS_ID}[hidden] {
+
+                display:
+                    none !important;
+            }
+
+
+            #${PAGE_TURN_CONTROLS_ID}
+            .wiz-page-turn-rail {
+
+                position:
+                    fixed;
+
+                top:
+                    0;
+
+                bottom:
+                    0;
+
+                display:
+                    grid;
+
+                grid-template-rows:
+                    minmax(0, 1fr)
+                    minmax(0, 1fr);
+
+                width:
+                    32px;
+
+                padding-top:
+                    env(safe-area-inset-top);
+
+                padding-bottom:
+                    env(safe-area-inset-bottom);
+
+                box-sizing:
+                    border-box;
+
+                pointer-events:
+                    auto;
+            }
+
+
+            #${PAGE_TURN_CONTROLS_ID}
+            .wiz-page-turn-left {
+
+                left:
+                    0;
+
+                left:
+                    env(safe-area-inset-left);
+            }
+
+
+            #${PAGE_TURN_CONTROLS_ID}
+            .wiz-page-turn-right {
+
+                right:
+                    0;
+
+                right:
+                    env(safe-area-inset-right);
+            }
+
+
+            #${PAGE_TURN_CONTROLS_ID} button {
+
+                position:
+                    static !important;
+
+                display:
+                    flex;
+
+                align-items:
+                    center;
+
+                justify-content:
+                    center;
+
+                width:
+                    32px;
+
+                height:
+                    auto;
+
+                min-width:
+                    32px;
+
+                min-height:
+                    0;
+
+                margin:
+                    0;
+
+                padding:
+                    0;
+
+                -webkit-appearance:
+                    none !important;
+
+                appearance:
+                    none !important;
+
+                border:
+                    0 !important;
+
+                border-radius:
+                    0;
+
+                box-shadow:
+                    none !important;
+
+                text-shadow:
+                    none !important;
+
+                background:
+                    #ffffff !important;
+
+                color:
+                    #111111 !important;
+
+                opacity:
+                    1 !important;
+
+                animation:
+                    none !important;
+
+                transition:
+                    none !important;
+
+                cursor:
+                    pointer;
+
+                touch-action:
+                    manipulation;
+
+                -webkit-tap-highlight-color:
+                    transparent;
+            }
+
+
+            #${PAGE_TURN_CONTROLS_ID}
+            .wiz-page-turn-left
+            button {
+
+                border-right:
+                    1px solid #777777 !important;
+            }
+
+
+            #${PAGE_TURN_CONTROLS_ID}
+            .wiz-page-turn-right
+            button {
+
+                border-left:
+                    1px solid #777777 !important;
+            }
+
+
+            #${PAGE_TURN_CONTROLS_ID}
+            .wiz-page-turn-rail
+            button + button {
+
+                border-top:
+                    1px solid #aaaaaa !important;
+            }
+
+
+            #${PAGE_TURN_CONTROLS_ID} button:hover,
+            #${PAGE_TURN_CONTROLS_ID} button:active,
+            #${PAGE_TURN_CONTROLS_ID} button:focus {
+
+                background:
+                    #ffffff !important;
+
+                color:
+                    #111111 !important;
+
+                box-shadow:
+                    none !important;
+
+                transform:
+                    none !important;
+
+                filter:
+                    none !important;
+            }
+
+
+            #${PAGE_TURN_CONTROLS_ID} button:focus-visible {
+
+                outline:
+                    2px dashed #111111;
+
+                outline-offset:
+                    -3px;
+            }
+
+
+            #${PAGE_TURN_CONTROLS_ID} svg {
+
+                width:
+                    12px;
+
+                height:
+                    12px;
+
+                fill:
+                    none;
+
+                stroke:
+                    currentColor;
+
+                stroke-width:
+                    2;
+
+                stroke-linecap:
+                    round;
+
+                stroke-linejoin:
+                    round;
+
+                pointer-events:
+                    none;
+            }
 
             /* ====================================================
                Dividers
@@ -5165,7 +5472,9 @@
                 #ao3-wizard-ui *,
                 #ao3-wizard-ui *::before,
                 #ao3-wizard-ui *::after,
-                #${WIZARD_LAUNCHER_ID} {
+                #${WIZARD_LAUNCHER_ID},
+                #${PAGE_TURN_CONTROLS_ID},
+                #${PAGE_TURN_CONTROLS_ID} * {
 
                     animation:
                         none
@@ -5174,6 +5483,26 @@
                     transition:
                         none
                         !important;
+                }
+            }
+
+
+            @media print {
+
+                #${PAGE_TURN_CONTROLS_ID} {
+
+                    display:
+                        none !important;
+                }
+
+
+                html.ao3-wizard-page-turn-enabled body {
+
+                    padding-left:
+                        0 !important;
+
+                    padding-right:
+                        0 !important;
                 }
             }
         `;
@@ -5189,7 +5518,345 @@
 
 
     // ============================================================
-    // 13. HTML attribute escaping
+    // 13. Fixed dual-side page-turn rails
+    // ============================================================
+
+    let instantPageTurnTimer =
+        null;
+
+
+    function clampNumber(
+        value,
+        minimum,
+        maximum
+    ) {
+
+        return Math.min(
+            maximum,
+            Math.max(
+                minimum,
+                value
+            )
+        );
+    }
+
+
+    function getPageTurnViewportHeight() {
+
+        const visualViewport =
+            window.visualViewport;
+
+
+        return Math.max(
+            1,
+            (
+                visualViewport &&
+                visualViewport.height
+            ) ||
+            document.documentElement.clientHeight ||
+            window.innerHeight ||
+            1
+        );
+    }
+
+
+    function getPageTurnDistance() {
+
+        const viewportHeight =
+            getPageTurnViewportHeight();
+
+
+        const workContent =
+            document.querySelector(
+                '#workskin .userstuff'
+            );
+
+
+        const parsedLineHeight =
+            workContent
+                ? parseFloat(
+                    getComputedStyle(
+                        workContent
+                    ).lineHeight
+                )
+                : NaN;
+
+
+        const overlap =
+            Number.isFinite(
+                parsedLineHeight
+            )
+                ? clampNumber(
+                    Math.round(
+                        parsedLineHeight
+                    ),
+                    20,
+                    56
+                )
+                : 32;
+
+
+        return Math.max(
+            1,
+            viewportHeight -
+                overlap
+        );
+    }
+
+
+    function turnPage(direction) {
+
+        const scrollingElement =
+            document.scrollingElement ||
+            document.documentElement;
+
+
+        const currentTop =
+            scrollingElement.scrollTop;
+
+
+        const maximumTop =
+            Math.max(
+                0,
+                scrollingElement.scrollHeight -
+                scrollingElement.clientHeight
+            );
+
+
+        const targetTop =
+            clampNumber(
+                currentTop +
+                direction *
+                    getPageTurnDistance(),
+                0,
+                maximumTop
+            );
+
+
+        const root =
+            document.documentElement;
+
+
+        root.classList.add(
+            'ao3-wizard-instant-page-turn'
+        );
+
+
+        /* Force the no-animation rule to take effect before moving. */
+        void getComputedStyle(
+            root
+        ).scrollBehavior;
+
+
+        scrollingElement.scrollTop =
+            targetTop;
+
+
+        clearTimeout(
+            instantPageTurnTimer
+        );
+
+
+        instantPageTurnTimer =
+            setTimeout(
+                () => {
+
+                    root.classList.remove(
+                        'ao3-wizard-instant-page-turn'
+                    );
+                },
+                80
+            );
+    }
+
+
+    function createPageTurnControls() {
+
+        let container =
+            document.getElementById(
+                PAGE_TURN_CONTROLS_ID
+            );
+
+
+        if (container) {
+            return container;
+        }
+
+
+        container =
+            document.createElement(
+                'div'
+            );
+
+
+        container.id =
+            PAGE_TURN_CONTROLS_ID;
+
+
+        container.hidden =
+            true;
+
+
+        container.setAttribute(
+            'role',
+            'group'
+        );
+
+
+        container.setAttribute(
+            'aria-label',
+            '双侧整页翻页工具'
+        );
+
+
+        const upIcon = `
+            <svg
+                viewBox="0 0 24 24"
+                aria-hidden="true"
+                focusable="false"
+            >
+                <path d="m6 15 6-6 6 6"></path>
+            </svg>
+        `;
+
+
+        const downIcon = `
+            <svg
+                viewBox="0 0 24 24"
+                aria-hidden="true"
+                focusable="false"
+            >
+                <path d="m6 9 6 6 6-6"></path>
+            </svg>
+        `;
+
+
+        container.innerHTML = `
+
+            <div
+                class="wiz-page-turn-rail wiz-page-turn-left"
+                role="group"
+                aria-label="左侧翻页按钮"
+            >
+                <button
+                    type="button"
+                    data-page-turn-direction="-1"
+                    aria-label="左侧向上翻一页"
+                    title="向上翻一页"
+                >${upIcon}</button>
+
+                <button
+                    type="button"
+                    data-page-turn-direction="1"
+                    aria-label="左侧向下翻一页"
+                    title="向下翻一页"
+                >${downIcon}</button>
+            </div>
+
+            <div
+                class="wiz-page-turn-rail wiz-page-turn-right"
+                role="group"
+                aria-label="右侧翻页按钮"
+            >
+                <button
+                    type="button"
+                    data-page-turn-direction="-1"
+                    aria-label="右侧向上翻一页"
+                    title="向上翻一页"
+                >${upIcon}</button>
+
+                <button
+                    type="button"
+                    data-page-turn-direction="1"
+                    aria-label="右侧向下翻一页"
+                    title="向下翻一页"
+                >${downIcon}</button>
+            </div>
+        `;
+
+
+        document.body.appendChild(
+            container
+        );
+
+
+        container
+            .querySelectorAll(
+                '[data-page-turn-direction]'
+            )
+            .forEach(
+                button => {
+
+                    button.addEventListener(
+                        'click',
+                        () => {
+
+                            turnPage(
+                                Number(
+                                    button.dataset
+                                        .pageTurnDirection
+                                )
+                            );
+                        }
+                    );
+                }
+            );
+
+
+        return container;
+    }
+
+
+    function syncPageTurnControls(settings) {
+
+        const shouldShow =
+            settings &&
+            settings.showPageTurnControls ===
+                true;
+
+
+        const root =
+            document.documentElement;
+
+
+        if (!shouldShow) {
+
+            const existingControls =
+                document.getElementById(
+                    PAGE_TURN_CONTROLS_ID
+                );
+
+
+            if (existingControls) {
+                existingControls.hidden =
+                    true;
+            }
+
+
+            root.classList.remove(
+                'ao3-wizard-page-turn-enabled'
+            );
+
+
+            return;
+        }
+
+
+        const container =
+            createPageTurnControls();
+
+
+        container.hidden =
+            false;
+
+
+        root.classList.add(
+            'ao3-wizard-page-turn-enabled'
+        );
+    }
+
+    // ============================================================
+    // 14. HTML attribute escaping
     // ============================================================
 
     function escapeHtmlAttribute(value) {
@@ -5219,7 +5886,7 @@
 
 
     // ============================================================
-    // 14. Settings panel
+    // 15. Settings panel
     // ============================================================
 
     let wizardKeyboardShortcutBound =
@@ -5616,7 +6283,7 @@
                         href="javascript:void(0);"
                         id="opencfg_site_wizard"
                     >
-                        Site Wizard - 优化版
+                        Site Wizard - E-ink
                     </a>
                 `;
 
@@ -6117,7 +6784,6 @@
 
             </label>
 
-
             <label class="wiz-toggle-row">
 
                 <input
@@ -6213,6 +6879,25 @@
             </label>
 
 
+            <label class="wiz-toggle-row">
+
+                <input
+                    type="checkbox"
+                    id="wiz-page-turn-controls"
+                    ${
+                        settings.showPageTurnControls
+                            ? 'checked'
+                            : ''
+                    }
+                >
+
+                <span class="wiz-toggle-label">
+                    显示双侧翻页按钮
+                </span>
+
+            </label>
+
+
             <div class="wiz-save-area">
 
                 <button
@@ -6262,6 +6947,11 @@
 
         document.body.appendChild(
             launcher
+        );
+
+
+        syncPageTurnControls(
+            settings
         );
 
 
@@ -6583,6 +7273,14 @@
                             .checked,
 
 
+                    showPageTurnControls:
+                        document
+                            .getElementById(
+                                'wiz-page-turn-controls'
+                            )
+                            .checked,
+
+
                     hideNotes:
                         document
                             .getElementById(
@@ -6606,6 +7304,11 @@
                 // ------------------------------------------------
 
                 applyStyles();
+
+
+                syncPageTurnControls(
+                    newSettings
+                );
 
 
                 // ------------------------------------------------
@@ -6658,7 +7361,7 @@
 
 
     // ============================================================
-    // 15. Initialization
+    // 16. Initialization
     // ============================================================
 
     /*
